@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v13';
+const APP_BUILD = '2026-05-10-v14';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ */
@@ -99,7 +99,6 @@ function withTimeout(promise, ms, message) {
 }
 
 const el = {
-  userName: null,
   fileTree: null,
   fileListEmpty: null,
   btnLogin: null,
@@ -114,6 +113,8 @@ const el = {
   sidebarHead: null,
   listLoadingSpinner: null,
   treeSearch: null,
+  statusTtlBar: null,
+  statusTtlFill: null,
 };
 
 let saveStatusClearTimer = null;
@@ -161,20 +162,49 @@ function normalizePathLabel(label) {
     .trim();
 }
 
+function hideStatusTtlBar() {
+  if (el.statusTtlBar) {
+    el.statusTtlBar.hidden = true;
+    el.statusTtlBar.setAttribute('aria-hidden', 'true');
+  }
+  if (el.statusTtlFill) {
+    el.statusTtlFill.style.transition = 'none';
+    el.statusTtlFill.style.width = '100%';
+  }
+}
+
+/** Barra fina que encolhe durante autoClearMs (sincronizada com o texto que some). */
+function startStatusTtlCountdown(ms) {
+  if (!el.statusTtlBar || !el.statusTtlFill || !ms) return;
+  const fill = el.statusTtlFill;
+  el.statusTtlBar.hidden = false;
+  el.statusTtlBar.setAttribute('aria-hidden', 'false');
+  fill.style.transition = 'none';
+  fill.style.width = '100%';
+  fill.offsetWidth;
+  requestAnimationFrame(() => {
+    fill.style.transition = `width ${ms}ms linear`;
+    fill.style.width = '0%';
+  });
+}
+
 function setSaveStatus(text, options = {}) {
   const { autoClearMs } = options;
-  if (el.saveStatus) el.saveStatus.textContent = text || '';
   if (saveStatusClearTimer != null) {
     clearTimeout(saveStatusClearTimer);
     saveStatusClearTimer = null;
   }
+  hideStatusTtlBar();
+  if (el.saveStatus) el.saveStatus.textContent = text || '';
   if (autoClearMs != null && autoClearMs > 0 && text) {
+    startStatusTtlCountdown(autoClearMs);
     const cleared = text;
     saveStatusClearTimer = setTimeout(() => {
       saveStatusClearTimer = null;
       if (el.saveStatus && el.saveStatus.textContent === cleared) {
         el.saveStatus.textContent = '';
       }
+      hideStatusTtlBar();
     }, autoClearMs);
   }
 }
@@ -607,7 +637,6 @@ async function loadUserProfile() {
   }
   const data = await res.json();
   state.userDisplayName = data.name || data.email || '';
-  el.userName.textContent = state.userDisplayName;
   updateSidebarSectionTitle();
 }
 
@@ -761,9 +790,7 @@ function sortFolderTree(node) {
   folders.forEach(sortFolderTree);
 }
 
-/** Sem busca: primeiros níveis de pasta abertos. Com busca: tudo aberto para ver resultados. */
-const TREE_EXPAND_MAX_DEPTH = 4;
-
+/** Pastas começam fechadas; com filtro de busca expandimos tudo para mostrar resultados. */
 function renderTreeNode(node, container, depth, expandAll) {
   if (node.kind === 'file') {
     const li = document.createElement('li');
@@ -786,8 +813,7 @@ function renderTreeNode(node, container, depth, expandAll) {
   const li = document.createElement('li');
   li.className = 'tree-folder';
   const details = document.createElement('details');
-  details.open =
-    expandAll || depth < TREE_EXPAND_MAX_DEPTH;
+  details.open = Boolean(expandAll);
   const summary = document.createElement('summary');
   const fIcon = document.createElement('span');
   fIcon.className = 'tree-folder-icon fa fa-folder-o';
@@ -1044,7 +1070,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=13', window.location.href), {
+      .register(new URL('./sw.js?v=14', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1066,7 +1092,6 @@ function logout() {
   state.lastFileList = [];
   state.userDisplayName = '';
   state.aliasHintsByFileId = new Map();
-  el.userName.textContent = '';
   if (el.treeSearch) el.treeSearch.value = '';
   el.fileTree.innerHTML = '';
   el.fileListEmpty.hidden = false;
@@ -1085,7 +1110,6 @@ function logout() {
 }
 
 function bindUi() {
-  el.userName = document.getElementById('user-name');
   el.fileTree = document.getElementById('file-tree');
   el.fileListEmpty = document.getElementById('file-list-empty');
   el.btnLogin = document.getElementById('btn-google-login');
@@ -1100,6 +1124,8 @@ function bindUi() {
   el.sidebarHead = document.getElementById('sidebar-section-title');
   el.listLoadingSpinner = document.getElementById('list-loading-spinner');
   el.treeSearch = document.getElementById('tree-search');
+  el.statusTtlBar = document.getElementById('status-ttl-bar');
+  el.statusTtlFill = document.getElementById('status-ttl-fill');
 
   initTheme();
   updateSidebarSectionTitle();
