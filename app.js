@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v12';
+const APP_BUILD = '2026-05-10-v13';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ */
@@ -49,6 +49,10 @@ const state = {
   wantRefreshAfterToken: false,
   /** Última lista completa do Drive (para busca sem novo request). */
   lastFileList: [],
+  /** Nome para o cabeçalho da sidebar (OAuth userinfo). */
+  userDisplayName: '',
+  /** fileId → linhas de sugestão wiki (nome do ficheiro + aliases YAML). */
+  aliasHintsByFileId: new Map(),
 };
 
 const MSG_RELOAD_FROM_DRIVE =
@@ -107,9 +111,12 @@ const el = {
   btnReauthDrive: null,
   editorFileTitle: null,
   sidebar: null,
+  sidebarHead: null,
   listLoadingSpinner: null,
   treeSearch: null,
 };
+
+let saveStatusClearTimer = null;
 
 function setEditorFileTitle(label) {
   if (!el.editorFileTitle) return;
@@ -154,8 +161,30 @@ function normalizePathLabel(label) {
     .trim();
 }
 
-function setSaveStatus(text) {
+function setSaveStatus(text, options = {}) {
+  const { autoClearMs } = options;
   if (el.saveStatus) el.saveStatus.textContent = text || '';
+  if (saveStatusClearTimer != null) {
+    clearTimeout(saveStatusClearTimer);
+    saveStatusClearTimer = null;
+  }
+  if (autoClearMs != null && autoClearMs > 0 && text) {
+    const cleared = text;
+    saveStatusClearTimer = setTimeout(() => {
+      saveStatusClearTimer = null;
+      if (el.saveStatus && el.saveStatus.textContent === cleared) {
+        el.saveStatus.textContent = '';
+      }
+    }, autoClearMs);
+  }
+}
+
+function updateSidebarSectionTitle() {
+  if (!el.sidebarHead) return;
+  const name = (state.userDisplayName || '').trim();
+  el.sidebarHead.textContent = name
+    ? `Notas (.md) | ${name}`
+    : 'Notas (.md)';
 }
 
 function setListLoading(active) {
@@ -174,12 +203,155 @@ function debounce(fn, ms) {
   };
 }
 
-/** Nomes de notas (.md) para sugestão em [[ … — usa lista já carregada do Drive. */
-function buildWikiSuggestions(query) {
-  const ql = query.trim().toLowerCase();
+/** Parte do link Obsidian antes de `|` em [[nota|texto]]. */
+function wikiLinkQuerySegment(raw) {
+  return String(raw || '').split('|')[0].trim();
+}
+
+function stripYamlQuotes(s) {
+  let t = String(s || '').trim();
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"))
+  ) {
+    t = t.slice(1, -1);
+  }
+  return t.trim();
+}
+
+/** Extrai aliases do frontmatter YAML (Obsidian). */
+function extractAliasesFromMarkdown(text) {
+  const out = [];
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!m) return out;
+  const fm = m[1];
+
+  const aliasSingle = fm.match(/^alias:\s*(.+)$/m);
+  if (aliasSingle) out.push(stripYamlQuotes(aliasSingle[1]));
+
+  const lines = fm.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const ma = line.match(/^aliases:\s*(.*)$/);
+    if (!ma) {
+      i++;
+      continue;
+    }
+    const rest = ma[1].trim();
+    if (rest.startsWith('[')) {
+      const close = rest.lastIndexOf(']');
+      const open = rest.indexOf('[');
+      if (close > open) {
+        rest
+          .slice(open + 1, close)
+          .split(',')
+          .forEach((p) => {
+            const t = stripYamlQuotes(p.trim());
+            if (t) out.push(t);
+          });
+        i++;
+        continue;
+      }
+      const joined = lines.slice(i).join('\n');
+      const blk = joined.match(/^aliases:\s*\[([\s\S]*?)\]\s*$/m);
+      if (blk) {
+        blk[1].split(',').forEach((p) => {
+          const t = stripYamlQuotes(p.trim());
+          if (t) out.push(t);
+        });
+      }
+      break;
+    }
+    if (rest === '') {
+      i++;
+      while (i < lines.length && /^\s+-\s+/.test(lines[i])) {
+        out.push(stripYamlQuotes(lines[i].replace(/^\s+-\s+/, '').trim()));
+        i++;
+      }
+      continue;
+    }
+    out.push(stripYamlQuotes(rest));
+    i++;
+  }
+
+  return [...new Set(out.map((s) => String(s).trim()).filter(Boolean))];
+}
+
+async function getFileContentHead(fileId, maxBytes = 32768) {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+    fileId
+  )}?alt=media`;
+  let res = await driveFetch(url, {
+    headers: { Range: `bytes=0-${maxBytes - 1}` },
+  });
+  if (res.status === 416 || res.status === 404) {
+    res = await driveFetch(url);
+  }
+  if (!res.ok) throw new Error(await res.text());
+  return res.text();
+}
+
+function registerFileAliasesFromContent(file, text, targetMap = state.aliasHintsByFileId) {
+  const label = normalizePathLabel(file._listLabel || file.name);
+  const stem = (label.split('/').pop() || '')
+    .replace(/\.md$/i, '')
+    .trim();
+  if (!stem) return;
+
+  const aliases = extractAliasesFromMarkdown(text);
+  const rows = [];
+  const addTerm = (term) => {
+    const t = String(term || '').trim().toLowerCase();
+    if (!t) return;
+    rows.push({ stem, label, term: t });
+  };
+  addTerm(stem);
+  for (const a of aliases) addTerm(a);
+  targetMap.set(file.id, rows);
+}
+
+/** Após listar o vault: lê só o início de cada .md para aliases e nomes. */
+async function indexVaultWikiHints() {
+  const files = state.lastFileList || [];
+  const built = new Map();
+  const batchSize = 6;
+  for (let j = 0; j < files.length; j += batchSize) {
+    const slice = files.slice(j, j + batchSize);
+    await Promise.all(
+      slice.map(async (f) => {
+        if (!f?.id) return;
+        try {
+          const text = await getFileContentHead(f.id);
+          registerFileAliasesFromContent(f, text, built);
+        } catch (_) {
+          /* nota inacessível ou sem frontmatter */
+        }
+      })
+    );
+  }
+  state.aliasHintsByFileId = built;
+  const cf = state.currentFile;
+  const editorTxt = state.easyMDE?.value();
+  if (cf?.id && typeof editorTxt === 'string') {
+    registerFileAliasesFromContent(cf, editorTxt);
+  }
+}
+
+/** Nomes de notas (.md) + aliases YAML — usa lista do Drive e índice em aliasHintsByFileId. */
+function buildWikiSuggestions(queryRaw) {
+  const ql = wikiLinkQuerySegment(queryRaw).toLowerCase();
   if (ql.length < WIKI_LINK_MIN_CHARS) return [];
 
+  const seen = new Set();
   const raw = [];
+  const push = (stem, label) => {
+    const k = `${stem.toLowerCase()}\0${label}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    raw.push({ stem, label });
+  };
+
   for (const f of state.lastFileList || []) {
     const label = normalizePathLabel(f._listLabel || f.name);
     const stem = (label.split('/').pop() || '')
@@ -188,7 +360,14 @@ function buildWikiSuggestions(query) {
     if (!stem) continue;
     const blob = `${stem} ${label}`.toLowerCase();
     if (!blob.includes(ql)) continue;
-    raw.push({ stem, label });
+    push(stem, label);
+  }
+
+  for (const rows of state.aliasHintsByFileId.values()) {
+    for (const row of rows) {
+      if (!row.term.includes(ql)) continue;
+      push(row.stem, row.label);
+    }
   }
 
   raw.sort((a, b) =>
@@ -221,10 +400,10 @@ function wikiLinkHint(cm) {
   const before = line.slice(0, cur.ch);
   const match = before.match(/\[\[([^\[\]]*)$/);
   if (!match) return Pass;
-  const q = match[1];
-  if (q.length < WIKI_LINK_MIN_CHARS) return Pass;
+  const qRaw = match[1];
+  if (wikiLinkQuerySegment(qRaw).length < WIKI_LINK_MIN_CHARS) return Pass;
 
-  const items = buildWikiSuggestions(q);
+  const items = buildWikiSuggestions(qRaw);
   if (!items.length) return Pass;
 
   const innerStart = before.lastIndexOf('[[') + 2;
@@ -249,7 +428,8 @@ function attachWikiLinkAutocomplete(cm) {
     const before = line.slice(0, cur.ch);
     if (!/\[\[([^\[\]]*)$/.test(before)) return;
     const m = before.match(/\[\[([^\[\]]*)$/);
-    if (!m || m[1].length < WIKI_LINK_MIN_CHARS) return;
+    if (!m) return;
+    if (wikiLinkQuerySegment(m[1]).length < WIKI_LINK_MIN_CHARS) return;
     CM.showHint(cm, wikiLinkHint, { completeSingle: false });
   }, 90);
 
@@ -426,7 +606,9 @@ async function loadUserProfile() {
     );
   }
   const data = await res.json();
-  el.userName.textContent = data.name || data.email || '';
+  state.userDisplayName = data.name || data.email || '';
+  el.userName.textContent = state.userDisplayName;
+  updateSidebarSectionTitle();
 }
 
 async function driveFetch(url, options = {}) {
@@ -699,6 +881,9 @@ async function refreshFileList() {
     } else {
       renderFileTree(files, { expandAll: false, isFiltered: false });
     }
+    void indexVaultWikiHints().catch((e) =>
+      console.warn('[Brain Drive] índice wiki', e)
+    );
     setSaveStatus('');
     localStorage.setItem(LS_DRIVE_LIST_OK, '1');
   } finally {
@@ -767,7 +952,7 @@ async function saveCurrentFile() {
     content
   );
   state.dirty = false;
-  setSaveStatus('Salvo');
+  setSaveStatus('Salvo', { autoClearMs: 3200 });
 }
 
 async function reloadCurrentFileFromDrive() {
@@ -785,7 +970,8 @@ async function reloadCurrentFileFromDrive() {
       state.loadingFile = false;
       state.dirty = false;
     });
-    setSaveStatus('Recarregado do Drive');
+    registerFileAliasesFromContent(state.currentFile, text);
+    setSaveStatus('Recarregado do Drive', { autoClearMs: 4200 });
   } catch (e) {
     console.error(e);
     setSaveStatus('Erro ao recarregar');
@@ -814,6 +1000,7 @@ async function selectFile(file, btnEl) {
     setEditorFileTitle(file._listLabel || file.name);
     setSaveStatus('Abrindo…');
     const text = await getFileContent(file.id);
+    registerFileAliasesFromContent(file, text);
     state.loadingFile = true;
     state.easyMDE.value(text);
     queueMicrotask(() => {
@@ -857,7 +1044,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=12', window.location.href), {
+      .register(new URL('./sw.js?v=13', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -877,6 +1064,8 @@ function logout() {
   state.wantRefreshAfterToken = false;
   state.didInitialLoadAfterAuth = false;
   state.lastFileList = [];
+  state.userDisplayName = '';
+  state.aliasHintsByFileId = new Map();
   el.userName.textContent = '';
   if (el.treeSearch) el.treeSearch.value = '';
   el.fileTree.innerHTML = '';
@@ -891,6 +1080,7 @@ function logout() {
   setSaveStatus('');
   setListLoading(false);
   setEditorFileTitle(null);
+  updateSidebarSectionTitle();
   if (state.easyMDE) state.easyMDE.value('');
 }
 
@@ -907,10 +1097,12 @@ function bindUi() {
   el.btnReauthDrive = document.getElementById('btn-reauth-drive');
   el.editorFileTitle = document.getElementById('editor-file-title');
   el.sidebar = document.getElementById('sidebar');
+  el.sidebarHead = document.getElementById('sidebar-section-title');
   el.listLoadingSpinner = document.getElementById('list-loading-spinner');
   el.treeSearch = document.getElementById('tree-search');
 
   initTheme();
+  updateSidebarSectionTitle();
 
   el.btnTheme.addEventListener('click', toggleTheme);
 
