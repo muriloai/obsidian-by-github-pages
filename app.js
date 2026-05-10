@@ -1,3 +1,6 @@
+/** Incrementar ao mudar lógica — verificar na consola F12 se o deploy está atual. */
+const APP_BUILD = '2026-05-10-v3';
+
 /**
  * Configuração
  * CLIENT_ID: credencial OAuth "Aplicação Web" (GCP).
@@ -18,6 +21,9 @@ const SCOPES =
   'openid email profile https://www.googleapis.com/auth/drive';
 
 const AUTOSAVE_MS = 2000;
+
+/** Depois da primeira listagem Drive bem-sucedida, próximos logins usam prompt silencioso. */
+const LS_DRIVE_LIST_OK = 'brain-drive-drive-list-ok-v1';
 
 const state = {
   accessToken: null,
@@ -230,7 +236,12 @@ async function loadUserProfile() {
   const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
     headers: { Authorization: `Bearer ${state.accessToken}` },
   });
-  if (!res.ok) throw new Error(`userinfo: ${res.status}`);
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(
+      `Perfil Google (${res.status}). Confirme scopes openid/profile e token válido. ${t.slice(0, 120)}`
+    );
+  }
   const data = await res.json();
   el.userName.textContent = data.name || data.email || '';
 }
@@ -335,6 +346,7 @@ async function refreshFileList() {
   const files = await listMdInBrainFolder();
   renderFileList(files);
   setSaveStatus('');
+  localStorage.setItem(LS_DRIVE_LIST_OK, '1');
 }
 
 async function getFileContent(fileId) {
@@ -479,9 +491,11 @@ function toggleTheme() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
-    navigator.serviceWorker.register(new URL('./sw.js', window.location.href), {
-      scope: './',
-    }).catch((e) => console.warn('SW registar:', e));
+    navigator.serviceWorker
+      .register(new URL('./sw.js?v=3', window.location.href), {
+        scope: './',
+      })
+      .catch((e) => console.warn('SW registar:', e));
   };
   if (document.readyState === 'complete') onReady();
   else window.addEventListener('load', onReady);
@@ -537,7 +551,10 @@ function bindUi() {
       );
       return;
     }
-    state.tokenClient.requestAccessToken({ prompt: '' });
+    const silentOk = localStorage.getItem(LS_DRIVE_LIST_OK) === '1';
+    state.tokenClient.requestAccessToken({
+      prompt: silentOk ? '' : 'consent',
+    });
   });
 
   el.btnLogout.addEventListener('click', logout);
@@ -569,6 +586,7 @@ function bindUi() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  console.info('[Brain Drive] build', APP_BUILD);
   bindUi();
   whenGsiReady(() => {
     initTokenClient();
