@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#22283a" />
     <meta name="description" content="Editor Markdown com ficheiros .md do Google Drive" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Brain Drive" />
     <link rel="manifest" href="./manifest.json" />
@@ -34,7 +35,9 @@
         <p id="file-list-empty" class="file-list-empty">Inicie sessão para ver os ficheiros.</p>
       </aside>
       <section class="editor-wrap" aria-label="Editor">
-        <div id="editor-container"></div>
+        <div class="editor-shell">
+          <textarea id="markdown-editor" rows="12" aria-label="Conteúdo Markdown"></textarea>
+        </div>
       </section>
     </main>
     <script src="https://accounts.google.com/gsi/client" async defer></script>

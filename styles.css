@@ -209,22 +209,31 @@ html.dark .file-list li.is-active button {
   flex-direction: column;
 }
 
-#editor-container {
+.editor-shell {
   flex: 1;
   min-height: 0;
   border-radius: var(--editor-radius);
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--surface);
-}
-
-#editor-container .EasyMDEContainer {
-  height: 100%;
   display: flex;
   flex-direction: column;
 }
 
-#editor-container .EasyMDEContainer .CodeMirror {
+.editor-shell textarea#markdown-editor {
+  width: 100%;
+  min-height: 200px;
+  resize: vertical;
+}
+
+.editor-shell .EasyMDEContainer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-shell .EasyMDEContainer .CodeMirror {
   flex: 1;
   height: auto !important;
   min-height: 320px;
@@ -233,37 +242,37 @@ html.dark .file-list li.is-active button {
   color: var(--text);
 }
 
-html.dark #editor-container .EasyMDEContainer .CodeMirror {
+html.dark .editor-shell .EasyMDEContainer .CodeMirror {
   background: var(--surface);
 }
 
-#editor-container .EasyMDEContainer .CodeMirror-scroll {
+.editor-shell .EasyMDEContainer .CodeMirror-scroll {
   min-height: 280px;
 }
 
-#editor-container .EasyMDEContainer .editor-toolbar {
+.editor-shell .EasyMDEContainer .editor-toolbar {
   border-radius: var(--editor-radius) var(--editor-radius) 0 0;
   border: none;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
 
-#editor-container .EasyMDEContainer .editor-toolbar i.separator {
+.editor-shell .EasyMDEContainer .editor-toolbar i.separator {
   border-left-color: var(--border);
 }
 
-#editor-container .EasyMDEContainer .editor-toolbar button {
+.editor-shell .EasyMDEContainer .editor-toolbar button {
   color: var(--muted);
 }
 
-#editor-container .EasyMDEContainer .editor-toolbar button:hover,
-#editor-container .EasyMDEContainer .editor-toolbar button.active {
+.editor-shell .EasyMDEContainer .editor-toolbar button:hover,
+.editor-shell .EasyMDEContainer .editor-toolbar button.active {
   background: rgba(37, 99, 235, 0.12);
   border-color: transparent;
 }
 
-html.dark #editor-container .EasyMDEContainer .editor-toolbar button:hover,
-html.dark #editor-container .EasyMDEContainer .editor-toolbar button.active {
+html.dark .editor-shell .EasyMDEContainer .editor-toolbar button:hover,
+html.dark .editor-shell .EasyMDEContainer .editor-toolbar button.active {
   background: rgba(59, 130, 246, 0.2);
 }
 

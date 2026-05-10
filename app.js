@@ -438,7 +438,7 @@ function bindUi() {
   });
 
   state.easyMDE = new EasyMDE({
-    element: document.getElementById('editor-container'),
+    element: document.getElementById('markdown-editor'),
     spellChecker: false,
     status: ['lines', 'words', 'cursor'],
     placeholder: 'Selecione um ficheiro .md na lista…',
