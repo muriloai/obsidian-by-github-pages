@@ -44,20 +44,24 @@ body {
 }
 
 .app-header {
-  height: var(--header-h);
+  /* min-height: cabeçalho pode crescer quando os botões passam para 2ª linha */
+  min-height: var(--header-h);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 1rem;
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+  padding: 0.4rem 1rem;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  gap: 0.75rem;
+  column-gap: 0.75rem;
 }
 
 .brand {
   font-weight: 600;
   letter-spacing: -0.02em;
+  flex-shrink: 0;
 }
 
 .header-actions {
@@ -66,6 +70,9 @@ body {
   gap: 0.5rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .user-name {
@@ -274,6 +281,20 @@ html.dark .editor-shell .EasyMDEContainer .CodeMirror {
 html.dark .editor-shell .EasyMDEContainer .editor-toolbar button:hover,
 html.dark .editor-shell .EasyMDEContainer .editor-toolbar button.active {
   background: rgba(59, 130, 246, 0.2);
+}
+
+@media (max-width: 620px) {
+  .header-actions {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    row-gap: 0.35rem;
+  }
+
+  .btn-google {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: center;
+  }
 }
 
 @media (max-width: 720px) {
