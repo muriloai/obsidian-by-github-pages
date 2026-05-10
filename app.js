@@ -10,6 +10,8 @@ const CONFIG = {
   CLIENT_ID:
     '1096778565225-ucf7kcnrap9qnledd3cbugdoi5t3k1hc.apps.googleusercontent.com',
   BRAIN_FOLDER_ID: '1vTkjJSKbVZ1Swn7jfoh3IrJuG3E8Shhz',
+  /** Se a pasta Brain estiver num Shared Drive (Equipa), ponha true. */
+  BRAIN_IN_SHARED_DRIVE: false,
 };
 
 const SCOPES =
@@ -26,6 +28,8 @@ const state = {
   tokenClient: null,
   easyMDE: null,
   loadingFile: false,
+  /** Após "Autorizar Drive": novo token deve só voltar a listar ficheiros. */
+  wantRefreshAfterToken: false,
 };
 
 const tokenWaiters = [];
@@ -39,6 +43,7 @@ const el = {
   btnSave: null,
   btnTheme: null,
   saveStatus: null,
+  btnReauthDrive: null,
 };
 
 function hasOAuthClientConfigured() {
@@ -98,6 +103,7 @@ function initTokenClient() {
 function handleTokenResponse(resp) {
   if (resp.error) {
     console.error('Erro GIS:', resp);
+    state.wantRefreshAfterToken = false;
     tokenWaiters.splice(0).forEach((w) => w.reject(new Error(resp.error)));
     return;
   }
@@ -108,6 +114,27 @@ function handleTokenResponse(resp) {
   if (!state.didInitialLoadAfterAuth) {
     state.didInitialLoadAfterAuth = true;
     void bootstrapAfterAuth();
+  } else if (state.wantRefreshAfterToken) {
+    state.wantRefreshAfterToken = false;
+    void retryListAfterReauth();
+  }
+}
+
+/** Novo token após "Autorizar Drive" — voltar a pedir a lista (bootstrap já correu). */
+async function retryListAfterReauth() {
+  try {
+    setSaveStatus('A atualizar permissões…');
+    await refreshFileList();
+    setSaveStatus('');
+    if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
+  } catch (e) {
+    console.error(e);
+    const msg = e.message || String(e);
+    setSaveStatus(msg);
+    if (el.fileListEmpty) {
+      el.fileListEmpty.hidden = false;
+      el.fileListEmpty.textContent = msg;
+    }
   }
 }
 
@@ -123,11 +150,80 @@ async function bootstrapAfterAuth() {
     await loadUserProfile();
     el.btnLogin.hidden = true;
     el.btnLogout.hidden = false;
-    await refreshFileList();
   } catch (e) {
     console.error(e);
-    setSaveStatus('Erro ao carregar perfil ou lista');
+    setSaveStatus('Erro ao carregar o perfil. Tente sair e entrar de novo.');
+    return;
   }
+
+  try {
+    await refreshFileList();
+    setSaveStatus('');
+    if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
+  } catch (e) {
+    console.error(e);
+    const msg =
+      e.message ||
+      'Não foi possível listar ficheiros no Drive. Veja a mensagem abaixo.';
+    setSaveStatus(msg);
+    if (el.fileListEmpty) {
+      el.fileListEmpty.hidden = false;
+      el.fileListEmpty.textContent = msg;
+    }
+    if (el.btnReauthDrive)
+      el.btnReauthDrive.hidden = !shouldShowReauthButton(msg);
+  }
+}
+
+function explainDriveListFailure(status, bodyText) {
+  let raw = bodyText || '';
+  try {
+    const j = JSON.parse(raw);
+    const err = j.error || {};
+    const reason = err.errors?.[0]?.reason || '';
+    const msg = err.message || '';
+
+    if (
+      /Drive API has not been used|SERVICE_DISABLED|accessNotConfigured/i.test(
+        msg + reason
+      )
+    ) {
+      return (
+        'Ative a API "Google Drive API" na Google Cloud Console no mesmo projeto onde criou o Client ID ' +
+        '(APIs e serviços → Biblioteca → Google Drive API → Ativar).'
+      );
+    }
+
+    if (
+      reason === 'insufficientPermissions' ||
+      /ACCESS_TOKEN_SCOPE_INSUFFICIENT|Request had insufficient authentication scopes/i.test(
+        msg
+      )
+    ) {
+      return (
+        'Falta permissão para o Google Drive. Clique em "Autorizar Drive" ou remova o acesso desta app em ' +
+        'https://myaccount.google.com/permissions e volte a entrar para aceitar todos os pedidos.'
+      );
+    }
+
+    if (status === 404 || reason === 'notFound') {
+      return (
+        'Pasta não encontrada ou sem acesso. Confira o ID da pasta (BRAIN_FOLDER_ID ou ?folder= no URL).'
+      );
+    }
+
+    if (status === 403 && /cannotDownload/i.test(msg)) {
+      return 'Sem permissão para ler esta pasta. Confirme que a conta tem acesso à pasta no Drive.';
+    }
+
+    return msg || raw.slice(0, 240) || `Erro HTTP ${status}`;
+  } catch (_) {
+    return raw.slice(0, 240) || `Erro HTTP ${status}`;
+  }
+}
+
+function shouldShowReauthButton(message) {
+  return /Autorizar Drive|permissão|scope|Falta permissão/i.test(message);
 }
 
 async function loadUserProfile() {
@@ -168,15 +264,21 @@ async function listMdInBrainFolder() {
       q,
       fields,
       pageSize: '100',
-      supportsAllDrives: 'true',
-      includeItemsFromAllDrives: 'true',
     });
+    if (CONFIG.BRAIN_IN_SHARED_DRIVE) {
+      params.set('supportsAllDrives', 'true');
+      params.set('includeItemsFromAllDrives', 'true');
+      params.set('corpora', 'allDrives');
+    }
     if (pageToken) params.set('pageToken', pageToken);
 
     const res = await driveFetch(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`
     );
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(explainDriveListFailure(res.status, body));
+    }
     const data = await res.json();
     out.push(...(data.files || []));
     pageToken = data.nextPageToken;
@@ -390,6 +492,7 @@ function logout() {
   state.accessToken = null;
   state.currentFile = null;
   state.dirty = false;
+  state.wantRefreshAfterToken = false;
   state.didInitialLoadAfterAuth = false;
   el.userName.textContent = '';
   el.fileList.innerHTML = '';
@@ -398,6 +501,7 @@ function logout() {
     'Inicie sessão para ver os ficheiros.';
   el.btnLogin.hidden = false;
   el.btnLogout.hidden = true;
+  if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
   el.btnSave.disabled = true;
   setSaveStatus('');
   if (state.easyMDE) state.easyMDE.value('');
@@ -412,10 +516,19 @@ function bindUi() {
   el.btnSave = document.getElementById('btn-save');
   el.btnTheme = document.getElementById('btn-theme');
   el.saveStatus = document.getElementById('save-status');
+  el.btnReauthDrive = document.getElementById('btn-reauth-drive');
 
   initTheme();
 
   el.btnTheme.addEventListener('click', toggleTheme);
+
+  if (el.btnReauthDrive) {
+    el.btnReauthDrive.addEventListener('click', () => {
+      if (!state.tokenClient) return;
+      state.wantRefreshAfterToken = true;
+      state.tokenClient.requestAccessToken({ prompt: 'consent' });
+    });
+  }
 
   el.btnLogin.addEventListener('click', () => {
     if (!hasOAuthClientConfigured()) {
