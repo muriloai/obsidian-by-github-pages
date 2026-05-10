@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v17';
+const APP_BUILD = '2026-05-10-v19';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -9,12 +9,17 @@ const UI_EDITOR_EMPTY_TITLE =
   'Editor | selecione um arquivo na lista ao lado';
 
 /**
- * Configuração
- * CLIENT_ID: credencial OAuth "Aplicação Web" (GCP).
- * BRAIN_FOLDER_ID: ID na URL do Drive (.../folders/ESTE_ID) ou use ?folder=ID na página.
+ * Configuração (repositório / GitHub Pages público)
  *
- * GCP: inclua em "URIs de redirecionamento autorizados" → https://muriloai.github.io
- * (e http://localhost:PORTA para testes locais).
+ * CLIENT_ID — Em apps só no browser (SPA), o ID OAuth é público por desenho (Google não trata
+ * como segredo). O que protege: URIs de redirecionamento autorizadas no GCP, ecrã de consentimento,
+ * e “utilizadores de teste” enquanto o app não está em produção. Nunca commits com CLIENT_SECRET
+ * (só servidor); este projeto não usa secret no cliente.
+ *
+ * BRAIN_FOLDER_ID — Identifica uma pasta no Drive; não dá acesso sozinha: só contas com OAuth e
+ * permissão nessa pasta/cDrive conseguem ler ou escrever.
+ *
+ * GCP: URIs autorizadas → https://muriloai.github.io … (e localhost para dev).
  */
 const CONFIG = {
   CLIENT_ID:
@@ -448,23 +453,38 @@ function wikiLinkHint(cm) {
   };
 }
 
-/** EasyMDE pode usar outra instância CM que o addon registou no global — copiar showHint se faltar. */
+/**
+ * EasyMDE empacota outra cópia do CM; o addon show-hint faz defineExtension no global.
+ * O estático CodeMirror.showHint(cm,…) chama cm.showHint(opts) na instância — precisamos
+ * copiar showHint/closeHint do CodeMirror.prototype para o protótipo deste editor.
+ */
 function syncCodeMirrorShowHint(cm) {
-  const EditorCM = cm.constructor;
   const g = typeof CodeMirror !== 'undefined' ? CodeMirror : null;
-  if (
-    g &&
-    typeof g.showHint === 'function' &&
-    typeof EditorCM.showHint !== 'function'
-  ) {
-    EditorCM.showHint = g.showHint;
+  if (!g || !g.prototype) return;
+  const src = g.prototype;
+  const dst = Object.getPrototypeOf(cm);
+  if (typeof src.showHint === 'function' && typeof dst.showHint !== 'function') {
+    dst.showHint = src.showHint;
+  }
+  if (typeof src.closeHint === 'function' && typeof dst.closeHint !== 'function') {
+    dst.closeHint = src.closeHint;
+  }
+  if (typeof g.showHint === 'function' && typeof cm.constructor.showHint !== 'function') {
+    cm.constructor.showHint = g.showHint;
   }
 }
 
 function attachWikiLinkAutocomplete(cm) {
   syncCodeMirrorShowHint(cm);
-  const CM = cm.constructor;
-  if (!CM || typeof CM.showHint !== 'function') {
+  const runHint =
+    typeof CodeMirror !== 'undefined' && typeof CodeMirror.showHint === 'function'
+      ? (c) =>
+          CodeMirror.showHint(c, wikiLinkHint, {
+            completeSingle: false,
+            closeOnUnfocus: true,
+          })
+      : null;
+  if (!runHint || typeof cm.showHint !== 'function') {
     console.warn(
       '[Brain Drive] CodeMirror.showHint indisponível — autocomplete [[ desativado.'
     );
@@ -480,7 +500,7 @@ function attachWikiLinkAutocomplete(cm) {
     const m = before.match(/\[\[([^\[\]]*)$/);
     if (!m) return;
     if (wikiLinkQuerySegment(m[1]).length < WIKI_LINK_MIN_CHARS) return;
-    CM.showHint(cm, wikiLinkHint, { completeSingle: false, closeOnUnfocus: true });
+    runHint(cm);
   }, 45);
 
   cm.on('change', triggerWiki);
@@ -518,7 +538,6 @@ function handleTokenResponse(resp) {
     return;
   }
   state.accessToken = resp.access_token;
-  console.log('access_token', resp.access_token);
   tokenWaiters.splice(0).forEach((w) => w.resolve(resp.access_token));
 
   if (!state.didInitialLoadAfterAuth) {
@@ -1092,7 +1111,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=17', window.location.href), {
+      .register(new URL('./sw.js?v=19', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
