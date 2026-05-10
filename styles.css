@@ -1,0 +1,281 @@
+:root {
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --text: #1a1d26;
+  --muted: #5c6478;
+  --border: #dde1ea;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --sidebar-w: 280px;
+  --header-h: 52px;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --editor-radius: 8px;
+}
+
+html.dark {
+  --bg: #0f1117;
+  --surface: #161b22;
+  --text: #e6e9f0;
+  --muted: #8b95a8;
+  --border: #2d3548;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  height: var(--header-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 0.75rem;
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.user-name {
+  font-size: 0.875rem;
+  color: var(--muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  min-width: 5rem;
+}
+
+.btn {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:not(:disabled):hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+}
+
+.btn-google {
+  border-color: transparent;
+  background: #fff;
+  color: #444;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+html.dark .btn-google {
+  background: #2d3548;
+  color: var(--text);
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-head {
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.file-list li button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.5rem 1rem;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.file-list li button:hover,
+.file-list li button:focus-visible {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.file-list li.is-active button {
+  background: rgba(37, 99, 235, 0.2);
+  font-weight: 500;
+}
+
+html.dark .file-list li button:hover,
+html.dark .file-list li button:focus-visible {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+html.dark .file-list li.is-active button {
+  background: rgba(59, 130, 246, 0.25);
+}
+
+.file-list-empty {
+  margin: 0;
+  padding: 1rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.file-list-empty[hidden] {
+  display: none;
+}
+
+.editor-wrap {
+  flex: 1;
+  min-width: 0;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+#editor-container {
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--editor-radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+#editor-container .EasyMDEContainer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#editor-container .EasyMDEContainer .CodeMirror {
+  flex: 1;
+  height: auto !important;
+  min-height: 320px;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+html.dark #editor-container .EasyMDEContainer .CodeMirror {
+  background: var(--surface);
+}
+
+#editor-container .EasyMDEContainer .CodeMirror-scroll {
+  min-height: 280px;
+}
+
+#editor-container .EasyMDEContainer .editor-toolbar {
+  border-radius: var(--editor-radius) var(--editor-radius) 0 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+#editor-container .EasyMDEContainer .editor-toolbar i.separator {
+  border-left-color: var(--border);
+}
+
+#editor-container .EasyMDEContainer .editor-toolbar button {
+  color: var(--muted);
+}
+
+#editor-container .EasyMDEContainer .editor-toolbar button:hover,
+#editor-container .EasyMDEContainer .editor-toolbar button.active {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: transparent;
+}
+
+html.dark #editor-container .EasyMDEContainer .editor-toolbar button:hover,
+html.dark #editor-container .EasyMDEContainer .editor-toolbar button.active {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+@media (max-width: 720px) {
+  .app-main {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
