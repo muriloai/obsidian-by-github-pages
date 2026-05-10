@@ -162,6 +162,12 @@ body {
   height: 0.875rem;
 }
 
+.loading-spinner--large {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-width: 3px;
+}
+
 @keyframes spin-loading {
   to {
     transform: rotate(360deg);
@@ -268,29 +274,6 @@ html.dark .vault-tab:hover {
   border-bottom-color: var(--bg);
 }
 
-.vault-sidebar-toggle {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.45rem 0.75rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8125rem;
-  cursor: pointer;
-}
-
-.vault-sidebar-toggle:hover {
-  border-color: var(--muted);
-}
-
-.vault-sidebar-toggle[hidden] {
-  display: none !important;
-}
-
 .app-main {
   flex: 1;
   display: flex;
@@ -314,7 +297,13 @@ html.dark .vault-tab:hover {
   min-height: 0;
 }
 
+.panel-editor[hidden],
+.panel-graph[hidden] {
+  display: none !important;
+}
+
 .panel-graph {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -322,58 +311,35 @@ html.dark .vault-tab:hover {
   background: var(--bg);
 }
 
-.graph-toolbar {
-  flex-shrink: 0;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+.graph-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.graph-config-details {
-  margin-top: 0;
-  flex-shrink: 0;
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-.graph-config-details summary {
-  cursor: pointer;
-  color: var(--text);
-}
-
-.graph-config-body {
-  margin-top: 0.5rem;
-  max-height: 28vh;
-  overflow: auto;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
   background: var(--bg);
-  border: 1px solid var(--border);
-  font-family: ui-monospace, monospace;
-  font-size: 0.72rem;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
-.graph-hint {
+.graph-loading[hidden] {
+  display: none !important;
+}
+
+.graph-loading__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 28rem;
+  text-align: center;
+}
+
+.graph-loading__status {
   margin: 0;
-  flex: 1 1 220px;
-  font-size: 0.78rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
   color: var(--muted);
-  line-height: 1.4;
-}
-
-.graph-hint code {
-  font-size: 0.72rem;
-  padding: 0 0.2rem;
-  border-radius: 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
 }
 
 .graph-network {
@@ -646,6 +612,10 @@ html.dark .file-tree .tree-file button.is-active {
   background: var(--bg);
 }
 
+.btn-icon-close[hidden] {
+  display: none !important;
+}
+
 .editor-shell textarea#markdown-editor {
   width: 100%;
   min-height: 200px;
@@ -825,16 +795,12 @@ html.dark .editor-shell .EasyMDEContainer .editor-preview table tr:nth-child(2n)
     flex-direction: column;
   }
 
-  .sidebar:not(.sidebar--collapsed):not([hidden]) {
+  .sidebar:not([hidden]) {
     width: 100%;
     max-height: 42vh;
     opacity: 1;
     pointer-events: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
-  }
-
-  .vault-sidebar-toggle {
-    margin-left: 0;
   }
 }

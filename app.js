@@ -1,12 +1,12 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v22';
+const APP_BUILD = '2026-05-10-v23';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
 const WIKI_LINK_MIN_CHARS = 1;
 
 const UI_EDITOR_EMPTY_TITLE =
-  'Editor | abra uma nota pelo Mapa ou em Pastas';
+  'Editor | abra uma nota pelo Mapa ou na lista ao lado';
 
 /**
  * Configuração (repositório / GitHub Pages público)
@@ -60,8 +60,6 @@ const state = {
   aliasHintsByFileId: new Map(),
   /** 'editor' | 'graph' — abas Editor / Mapa */
   vaultMainTab: 'editor',
-  /** Painel Pastas visível (aba Editor). */
-  vaultSidebarOpen: false,
   /** Instância vis-network do mapa do vault */
   vaultGraphNetwork: null,
   vaultGraphBuilding: false,
@@ -138,11 +136,10 @@ const el = {
   panelEditor: null,
   panelGraph: null,
   graphNetwork: null,
+  graphLoading: null,
+  graphLoadingStatus: null,
   headerGraphStatus: null,
-  graphConfigDetails: null,
-  graphConfigBody: null,
   btnCloseNote: null,
-  btnVaultSidebar: null,
 };
 
 let saveStatusClearTimer = null;
@@ -153,6 +150,21 @@ function setHeaderGraphStatus(text) {
 
 function clearHeaderGraphStatus() {
   setHeaderGraphStatus('');
+}
+
+function showGraphLoading(visible) {
+  if (!el.graphLoading) return;
+  el.graphLoading.hidden = !visible;
+  el.graphLoading.setAttribute('aria-busy', visible ? 'true' : 'false');
+}
+
+function setGraphProgress(text) {
+  if (el.graphLoadingStatus) el.graphLoadingStatus.textContent = text || '';
+}
+
+function syncCloseNoteVisibility() {
+  if (!el.btnCloseNote) return;
+  el.btnCloseNote.hidden = !state.currentFile;
 }
 
 function setEditorFileTitle(label) {
@@ -1234,32 +1246,6 @@ function applyObsidianGraphFilters(nodes, edges, raw) {
   };
 }
 
-function renderGraphConfigPanel() {
-  if (!el.graphConfigDetails || !el.graphConfigBody) return;
-  const lines = [];
-  if (state.obsidianBookmarksRaw) {
-    lines.push(
-      `bookmarks.json — ${state.obsidianBookmarkPaths.size} caminho(s) usado(s) para destaque.`
-    );
-  } else {
-    lines.push(
-      'bookmarks.json — não encontrado em .obsidian (nome ou plugin pode mudar).'
-    );
-  }
-  if (state.obsidianGraphRaw) {
-    lines.push(
-      '\ngraph.json — dados brutos (estrutura depende da versão do Obsidian):\n' +
-        JSON.stringify(state.obsidianGraphRaw, null, 2)
-    );
-  } else {
-    lines.push(
-      '\ngraph.json — não encontrado. Filtros do grafo podem estar só na máquina local.'
-    );
-  }
-  el.graphConfigBody.textContent = lines.join('\n');
-  el.graphConfigDetails.hidden = false;
-}
-
 function destroyVaultGraphNetwork() {
   if (state.vaultGraphNetwork) {
     try {
@@ -1332,10 +1318,8 @@ async function buildVaultGraphModel() {
       if (i >= total) break;
       await scanOne(files[i]);
       finishedCount++;
-      if (el.headerGraphStatus && finishedCount % 25 === 0) {
-        setHeaderGraphStatus(
-          `Extraindo links [[…]] ${finishedCount}/${total}`
-        );
+      if (finishedCount % 25 === 0) {
+        setGraphProgress(`Extraindo links [[…]] ${finishedCount}/${total}`);
       }
     }
   }
@@ -1356,11 +1340,17 @@ async function refreshVaultGraphView() {
   }
 
   if (state.vaultGraphBuilding) return;
+
   state.vaultGraphBuilding = true;
-  setHeaderGraphStatus('Preparando mapa…');
+  showGraphLoading(true);
+  setGraphProgress('Preparando mapa…');
+  destroyVaultGraphNetwork();
 
   try {
+    setGraphProgress('Carregando bookmarks e filtros (.obsidian)…');
     await loadObsidianConfigsForVault();
+
+    setGraphProgress('Construindo notas e extraindo links [[…]]…');
     let { nodes, edges } = await buildVaultGraphModel();
 
     const filtered = applyObsidianGraphFilters(
@@ -1383,15 +1373,12 @@ async function refreshVaultGraphView() {
       setHeaderGraphStatus(line);
     }
 
-    renderGraphConfigPanel();
-
     const data = {
       nodes: new vis.DataSet(nodes),
       edges: new vis.DataSet(edges),
     };
     const opts = buildVisNetworkOptions();
 
-    destroyVaultGraphNetwork();
     state.vaultGraphNetwork = new vis.Network(el.graphNetwork, data, opts);
     state.vaultGraphNetwork.on('click', (p) => {
       if (p.nodes.length === 1) {
@@ -1400,9 +1387,12 @@ async function refreshVaultGraphView() {
     });
   } catch (e) {
     console.warn(e);
-    setHeaderGraphStatus(e.message || String(e));
+    const msg = e.message || String(e);
+    setHeaderGraphStatus(msg);
+    setGraphProgress(msg);
   } finally {
     state.vaultGraphBuilding = false;
+    showGraphLoading(false);
   }
 }
 
@@ -1410,18 +1400,10 @@ function syncVaultSidebarForTab() {
   if (!el.sidebar) return;
   if (state.vaultMainTab === 'graph') {
     el.sidebar.hidden = true;
-    if (el.btnVaultSidebar) el.btnVaultSidebar.hidden = true;
     return;
   }
   el.sidebar.hidden = false;
-  el.sidebar.classList.toggle('sidebar--collapsed', !state.vaultSidebarOpen);
-  if (el.btnVaultSidebar) {
-    el.btnVaultSidebar.hidden = false;
-    el.btnVaultSidebar.setAttribute(
-      'aria-expanded',
-      state.vaultSidebarOpen ? 'true' : 'false'
-    );
-  }
+  el.sidebar.classList.remove('sidebar--collapsed');
 }
 
 function switchVaultTab(tab) {
@@ -1528,7 +1510,7 @@ function closeCurrentNote() {
   }
   el.btnSave.disabled = true;
   if (el.btnReloadFile) el.btnReloadFile.disabled = true;
-  if (el.btnCloseNote) el.btnCloseNote.hidden = true;
+  syncCloseNoteVisibility();
   if (el.fileTree) {
     el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
       b.classList.remove('is-active')
@@ -1591,10 +1573,18 @@ async function selectFile(file, btnEl) {
     });
     el.btnSave.disabled = false;
     if (el.btnReloadFile) el.btnReloadFile.disabled = false;
-    if (el.btnCloseNote) el.btnCloseNote.hidden = false;
+    syncCloseNoteVisibility();
     setSaveStatus('');
   } catch (e) {
     console.error(e);
+    state.currentFile = null;
+    setEditorFileTitle(null);
+    syncCloseNoteVisibility();
+    if (el.fileTree) {
+      el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
+        b.classList.remove('is-active')
+      );
+    }
     setSaveStatus('Erro ao abrir o arquivo');
   }
 }
@@ -1632,7 +1622,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=22', window.location.href), {
+      .register(new URL('./sw.js?v=23', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1669,7 +1659,7 @@ function logout() {
   setEditorFileTitle(null);
   updateSidebarSectionTitle();
   if (state.easyMDE) state.easyMDE.value('');
-  if (el.btnCloseNote) el.btnCloseNote.hidden = true;
+  syncCloseNoteVisibility();
   destroyVaultGraphNetwork();
   state.obsidianBookmarksRaw = null;
   state.obsidianGraphRaw = null;
@@ -1699,11 +1689,10 @@ function bindUi() {
   el.panelEditor = document.getElementById('panel-editor');
   el.panelGraph = document.getElementById('panel-graph');
   el.graphNetwork = document.getElementById('graph-network');
+  el.graphLoading = document.getElementById('graph-loading');
+  el.graphLoadingStatus = document.getElementById('graph-loading-status');
   el.headerGraphStatus = document.getElementById('header-graph-status');
-  el.graphConfigDetails = document.getElementById('graph-config-details');
-  el.graphConfigBody = document.getElementById('graph-config-body');
   el.btnCloseNote = document.getElementById('btn-close-note');
-  el.btnVaultSidebar = document.getElementById('btn-vault-sidebar');
 
   initTheme();
   updateSidebarSectionTitle();
@@ -1713,13 +1702,6 @@ function bindUi() {
     el.tabEditor.addEventListener('click', () => switchVaultTab('editor'));
   if (el.tabGraph)
     el.tabGraph.addEventListener('click', () => switchVaultTab('graph'));
-
-  if (el.btnVaultSidebar) {
-    el.btnVaultSidebar.addEventListener('click', () => {
-      state.vaultSidebarOpen = !state.vaultSidebarOpen;
-      syncVaultSidebarForTab();
-    });
-  }
 
   if (el.btnCloseNote)
     el.btnCloseNote.addEventListener('click', () => closeCurrentNote());
@@ -1772,7 +1754,7 @@ function bindUi() {
     element: document.getElementById('markdown-editor'),
     spellChecker: false,
     status: false,
-    placeholder: 'Abra uma nota pelo Mapa ou pelo botão Pastas.',
+    placeholder: 'Abra uma nota pelo Mapa ou na lista ao lado.',
     /* Font Awesome 4 já é carregado no index.html (CDN); evita duplicar ou falhar no auto-download */
     autoDownloadFontAwesome: false,
   });
@@ -1784,6 +1766,8 @@ function bindUi() {
   });
 
   attachWikiLinkAutocomplete(state.easyMDE.codemirror);
+
+  syncCloseNoteVisibility();
 
   setListLoading(false);
   registerServiceWorker();
