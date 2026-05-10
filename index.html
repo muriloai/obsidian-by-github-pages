@@ -9,7 +9,7 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Brain Drive" />
-    <link rel="manifest" href="./manifest.json?v=19" />
+    <link rel="manifest" href="./manifest.json?v=20" />
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <link rel="icon" type="image/png" href="./icons/icon-192.png" />
     <title>Brain Drive</title>
@@ -24,7 +24,7 @@
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.css"
     />
-    <link rel="stylesheet" href="./styles.css?v=19" />
+    <link rel="stylesheet" href="./styles.css?v=20" />
   </head>
   <body>
     <header class="app-header">
@@ -63,7 +63,16 @@
         <button type="button" id="btn-google-login" class="btn btn-google" disabled>Entrar com Google</button>
       </div>
     </header>
+    <nav class="vault-tabs" aria-label="Vista do vault">
+      <button type="button" id="tab-editor" class="vault-tab is-active">
+        <span class="fa fa-edit" aria-hidden="true"></span> Editor
+      </button>
+      <button type="button" id="tab-graph" class="vault-tab">
+        <span class="fa fa-share-alt" aria-hidden="true"></span> Mapa
+      </button>
+    </nav>
     <main class="app-main">
+      <div id="panel-editor" class="panel-editor">
       <aside id="sidebar" class="sidebar" aria-label="Pastas e arquivos Markdown">
         <div id="sidebar-section-title" class="sidebar-head">Notas (.md)</div>
         <div class="sidebar-search-wrap">
@@ -91,6 +100,17 @@
           <textarea id="markdown-editor" rows="12" aria-label="Conteúdo em Markdown"></textarea>
         </div>
       </section>
+      </div>
+      <div id="panel-graph" class="panel-graph" hidden>
+        <div class="graph-toolbar">
+          <p id="graph-status" class="graph-status" role="status"></p>
+          <details id="graph-config-details" class="graph-config-details" hidden>
+            <summary>Ficheiros Obsidian (.obsidian)</summary>
+            <div id="graph-config-body" class="graph-config-body"></div>
+          </details>
+        </div>
+        <div id="graph-network" class="graph-network" aria-label="Mapa de ligações entre notas"></div>
+      </div>
     </main>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <!-- Núcleo CM antes do addon: show-hint.js usa CodeMirror global na linha 1 -->
@@ -98,6 +118,7 @@
     <script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.js"></script>
     <!-- v=invalida cache agressivo do GitHub Pages / browser -->
-    <script src="./app.js?v=19" defer></script>
+    <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+    <script src="./app.js?v=20" defer></script>
   </body>
 </html>

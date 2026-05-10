@@ -1,5 +1,5 @@
 /* Service worker mínimo — permite instalabilidade como PWA (inclui iOS, com limitações do Safari). */
-const CACHE_VERSION = 'brain-drive-v19';
+const CACHE_VERSION = 'brain-drive-v20';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v19';
+const APP_BUILD = '2026-05-10-v20';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -58,7 +58,18 @@ const state = {
   userDisplayName: '',
   /** fileId → linhas de sugestão wiki (nome do ficheiro + aliases YAML). */
   aliasHintsByFileId: new Map(),
+  /** 'editor' | 'graph' — abas Editor / Mapa */
+  vaultMainTab: 'editor',
+  /** Instância vis-network do mapa do vault */
+  vaultGraphNetwork: null,
+  vaultGraphBuilding: false,
+  obsidianBookmarksRaw: null,
+  obsidianGraphRaw: null,
+  /** Caminhos normalizados vindos de .obsidian/bookmarks.json */
+  obsidianBookmarkPaths: new Set(),
 };
+
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
 const MSG_RELOAD_FROM_DRIVE =
   'Recarregar substitui o texto pela última versão salva no Google Drive.\n\n' +
@@ -120,6 +131,14 @@ const el = {
   treeSearch: null,
   statusTtlBar: null,
   statusTtlFill: null,
+  tabEditor: null,
+  tabGraph: null,
+  panelEditor: null,
+  panelGraph: null,
+  graphNetwork: null,
+  graphStatus: null,
+  graphConfigDetails: null,
+  graphConfigBody: null,
 };
 
 let saveStatusClearTimer = null;
@@ -951,6 +970,8 @@ async function refreshFileList() {
     void indexVaultWikiHints().catch((e) =>
       console.warn('[Brain Drive] índice wiki', e)
     );
+    destroyVaultGraphNetwork();
+    if (state.vaultMainTab === 'graph') void refreshVaultGraphView();
     setSaveStatus('');
     localStorage.setItem(LS_DRIVE_LIST_OK, '1');
   } finally {
@@ -964,6 +985,368 @@ async function getFileContent(fileId) {
   );
   if (!res.ok) throw new Error(await res.text());
   return res.text();
+}
+
+async function findChildFolderId(parentId, folderName) {
+  const items = await listAllItemsInFolder(parentId);
+  const hit = items.find(
+    (i) => i.mimeType === FOLDER_MIME && i.name === folderName
+  );
+  return hit?.id || null;
+}
+
+async function findFileInFolder(parentId, fileName) {
+  const items = await listAllItemsInFolder(parentId);
+  return (
+    items.find((i) => i.mimeType !== FOLDER_MIME && i.name === fileName) ||
+    null
+  );
+}
+
+function collectBookmarkPathsFromObsidianJson(data, intoSet) {
+  function walk(node) {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    if (node.type === 'file' && typeof node.path === 'string') {
+      intoSet.add(normalizePathLabel(node.path));
+    }
+    if (node.items) walk(node.items);
+    if (node.children) walk(node.children);
+  }
+  walk(data?.items ?? data);
+}
+
+async function loadObsidianConfigsForVault() {
+  state.obsidianBookmarksRaw = null;
+  state.obsidianGraphRaw = null;
+  state.obsidianBookmarkPaths = new Set();
+
+  const root = getBrainFolderId();
+  if (!root || !state.accessToken) return;
+
+  try {
+    const obsId = await findChildFolderId(root, '.obsidian');
+    if (!obsId) return;
+
+    const bm = await findFileInFolder(obsId, 'bookmarks.json');
+    if (bm) {
+      const txt = await getFileContent(bm.id);
+      state.obsidianBookmarksRaw = JSON.parse(txt);
+      collectBookmarkPathsFromObsidianJson(
+        state.obsidianBookmarksRaw,
+        state.obsidianBookmarkPaths
+      );
+    }
+
+    const gf = await findFileInFolder(obsId, 'graph.json');
+    if (gf) {
+      const txt = await getFileContent(gf.id);
+      state.obsidianGraphRaw = JSON.parse(txt);
+    }
+  } catch (e) {
+    console.warn('[Brain Drive] .obsidian', e);
+  }
+}
+
+function shortLabelForGraph(f) {
+  const lab = normalizePathLabel(f._listLabel || f.name);
+  const parts = lab.split('/').filter(Boolean);
+  if (parts.length <= 2) return parts.join('/') || lab;
+  return `…/${parts.slice(-2).join('/')}`;
+}
+
+function buildStemToFilesMap(files) {
+  const m = new Map();
+  for (const f of files) {
+    const lab = normalizePathLabel(f._listLabel || f.name);
+    const stem = (lab.split('/').pop() || '')
+      .replace(/\.md$/i, '')
+      .trim()
+      .toLowerCase();
+    if (!stem) continue;
+    if (!m.has(stem)) m.set(stem, []);
+    m.get(stem).push(f);
+  }
+  return m;
+}
+
+function resolveWikiTargetToFile(raw, files, stemMap) {
+  const t = raw.trim();
+  if (!t) return null;
+  let norm = normalizePathLabel(t.replace(/\\/g, '/'));
+  const nLow = norm.toLowerCase();
+
+  if (!nLow.endsWith('.md')) {
+    const withMd = `${norm}.md`;
+    for (const f of files) {
+      const lab = normalizePathLabel(f._listLabel || f.name);
+      const ll = lab.toLowerCase();
+      if (ll === withMd.toLowerCase() || ll.endsWith('/' + withMd.toLowerCase())) {
+        return f;
+      }
+    }
+  }
+
+  for (const f of files) {
+    const lab = normalizePathLabel(f._listLabel || f.name);
+    if (lab.toLowerCase() === nLow) return f;
+  }
+
+  const stemKey = (norm.split('/').pop() || norm)
+    .replace(/\.md$/i, '')
+    .trim()
+    .toLowerCase();
+  const cand = stemMap.get(stemKey);
+  if (cand?.length === 1) return cand[0];
+  return null;
+}
+
+function extractWikiLinkTargetsForGraph(md) {
+  const out = [];
+  const s = String(md || '');
+  const re = /\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]/g;
+  let m;
+  while ((m = re.exec(s)) !== null) out.push(m[1].trim());
+  return out;
+}
+
+function getVaultGraphThemeColors() {
+  const dark = document.documentElement.classList.contains('dark');
+  if (dark) {
+    return {
+      nodeFont: '#e6e9f0',
+      nodeBg: '#161b22',
+      nodeBgHi: '#1f2937',
+      nodeBorder: '#3d4f6f',
+      edge: '#5c6b85',
+      accent: '#60a5fa',
+      bookmarkBg: '#14532d',
+      bookmarkBorder: '#22c55e',
+    };
+  }
+  return {
+    nodeFont: '#1a1d26',
+    nodeBg: '#ffffff',
+    nodeBgHi: '#f1f5f9',
+    nodeBorder: '#cbd5e1',
+    edge: '#94a3b8',
+    accent: '#2563eb',
+    bookmarkBg: '#dcfce7',
+    bookmarkBorder: '#16a34a',
+  };
+}
+
+function buildVisNetworkOptions() {
+  const th = getVaultGraphThemeColors();
+  return {
+    physics: {
+      enabled: true,
+      stabilization: { iterations: 120 },
+      barnesHut: {
+        gravitationalConstant: -22000,
+        springLength: 175,
+      },
+    },
+    nodes: {
+      font: { color: th.nodeFont, size: 13 },
+      borderWidth: 2,
+      shape: 'box',
+      margin: 10,
+      color: {
+        highlight: {
+          background: th.nodeBgHi,
+          border: th.accent,
+        },
+      },
+    },
+    edges: {
+      arrows: { to: { enabled: true, scaleFactor: 0.45 } },
+      color: { color: th.edge, highlight: th.accent },
+      smooth: { type: 'continuous', roundness: 0.35 },
+    },
+    interaction: { hover: true, tooltipDelay: 100, multiselect: false },
+  };
+}
+
+function renderGraphConfigPanel() {
+  if (!el.graphConfigDetails || !el.graphConfigBody) return;
+  const lines = [];
+  if (state.obsidianBookmarksRaw) {
+    lines.push(
+      `bookmarks.json — ${state.obsidianBookmarkPaths.size} caminho(s) reconhecido(s).`
+    );
+  } else {
+    lines.push(
+      'bookmarks.json — não encontrado em .obsidian (o Obsidian pode usar outro nome ou plugin).'
+    );
+  }
+  if (state.obsidianGraphRaw) {
+    lines.push(
+      '\ngraph.json — conteúdo (filtros/guardados variam por versão Obsidian):\n' +
+        JSON.stringify(state.obsidianGraphRaw, null, 2)
+    );
+  } else {
+    lines.push(
+      '\ngraph.json — não encontrado. Muitas versões não gravam filtros do grafo neste ficheiro.'
+    );
+  }
+  el.graphConfigBody.textContent = lines.join('\n');
+  el.graphConfigDetails.hidden = false;
+}
+
+function destroyVaultGraphNetwork() {
+  if (state.vaultGraphNetwork) {
+    try {
+      state.vaultGraphNetwork.destroy();
+    } catch (_) {
+      /* ignore */
+    }
+    state.vaultGraphNetwork = null;
+  }
+}
+
+async function buildVaultGraphModel() {
+  const files = state.lastFileList || [];
+  const th = getVaultGraphThemeColors();
+  const bp = state.obsidianBookmarkPaths;
+
+  if (!files.length) return { nodes: [], edges: [] };
+
+  const stemMap = buildStemToFilesMap(files);
+
+  const nodes = files.map((f) => {
+    const fullPath = normalizePathLabel(f._listLabel || f.name);
+    const pathLow = fullPath.toLowerCase();
+    let isBm = bp.has(fullPath) || bp.has(pathLow);
+    if (!isBm) {
+      for (const p of bp) {
+        if (pathLow.endsWith(p.toLowerCase()) || p.toLowerCase().endsWith(pathLow)) {
+          isBm = true;
+          break;
+        }
+      }
+    }
+    return {
+      id: f.id,
+      label: shortLabelForGraph(f),
+      title: fullPath + (isBm ? ' · bookmark Obsidian' : ''),
+      color: isBm
+        ? { background: th.bookmarkBg, border: th.bookmarkBorder }
+        : { background: th.nodeBg, border: th.nodeBorder },
+    };
+  });
+
+  const edgeSeen = new Set();
+  const edges = [];
+  let nextFileIndex = 0;
+  let finishedCount = 0;
+  const total = files.length;
+  const concurrency = 5;
+
+  async function scanOne(f) {
+    let text;
+    try {
+      text = await getFileContent(f.id);
+    } catch {
+      return;
+    }
+    for (const tgt of extractWikiLinkTargetsForGraph(text)) {
+      const to = resolveWikiTargetToFile(tgt, files, stemMap);
+      if (!to || to.id === f.id) continue;
+      const key = `${f.id}->${to.id}`;
+      if (edgeSeen.has(key)) continue;
+      edgeSeen.add(key);
+      edges.push({ from: f.id, to: to.id });
+    }
+  }
+
+  async function worker() {
+    while (true) {
+      const i = nextFileIndex++;
+      if (i >= total) break;
+      await scanOne(files[i]);
+      finishedCount++;
+      if (el.graphStatus && finishedCount % 30 === 0) {
+        el.graphStatus.textContent = `A extrair ligações [[…]]… ${finishedCount}/${total}`;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  return { nodes, edges };
+}
+
+async function refreshVaultGraphView() {
+  if (!el.graphNetwork || !el.graphStatus) return;
+
+  if (typeof vis === 'undefined' || !vis.Network || !vis.DataSet) {
+    el.graphStatus.textContent =
+      'Biblioteca de mapa (vis-network) não carregou. Verifique a rede ou bloqueios.';
+    return;
+  }
+
+  if (state.vaultGraphBuilding) return;
+  state.vaultGraphBuilding = true;
+  el.graphStatus.textContent = 'A preparar mapa…';
+
+  try {
+    await loadObsidianConfigsForVault();
+    const { nodes, edges } = await buildVaultGraphModel();
+
+    const bm = state.obsidianBookmarkPaths.size;
+    el.graphStatus.textContent =
+      nodes.length === 0
+        ? 'Sem notas listadas. Faça login e aguarde a lista do vault.'
+        : `${nodes.length} notas · ${edges.length} ligações` +
+          (bm ? ` · ${bm} bookmark(s) em bookmarks.json` : '');
+
+    renderGraphConfigPanel();
+
+    const data = {
+      nodes: new vis.DataSet(nodes),
+      edges: new vis.DataSet(edges),
+    };
+    const opts = buildVisNetworkOptions();
+
+    destroyVaultGraphNetwork();
+    state.vaultGraphNetwork = new vis.Network(el.graphNetwork, data, opts);
+    state.vaultGraphNetwork.on('doubleClick', (p) => {
+      if (p.nodes.length) switchToEditorAndOpenNote(p.nodes[0]);
+    });
+  } catch (e) {
+    console.warn(e);
+    el.graphStatus.textContent = e.message || String(e);
+  } finally {
+    state.vaultGraphBuilding = false;
+  }
+}
+
+function switchVaultTab(tab) {
+  if (tab !== 'editor' && tab !== 'graph') return;
+  state.vaultMainTab = tab;
+  if (el.tabEditor)
+    el.tabEditor.classList.toggle('is-active', tab === 'editor');
+  if (el.tabGraph) el.tabGraph.classList.toggle('is-active', tab === 'graph');
+  if (el.panelEditor) el.panelEditor.hidden = tab !== 'editor';
+  if (el.panelGraph) el.panelGraph.hidden = tab !== 'graph';
+
+  const showEditorChrome = tab === 'editor';
+  if (el.btnSave) el.btnSave.hidden = !showEditorChrome;
+  if (el.btnReloadFile) el.btnReloadFile.hidden = !showEditorChrome;
+
+  if (tab === 'graph') void refreshVaultGraphView();
+}
+
+function switchToEditorAndOpenNote(fileId) {
+  const f = state.lastFileList.find((x) => x.id === fileId);
+  if (!f) return;
+  switchVaultTab('editor');
+  void selectFile(f, null);
 }
 
 function buildMultipartBody(fileName, content) {
@@ -1105,13 +1488,18 @@ function toggleTheme() {
   } catch (_) {
     /* ignore */
   }
+
+  if (state.vaultMainTab === 'graph') {
+    destroyVaultGraphNetwork();
+    void refreshVaultGraphView();
+  }
 }
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=19', window.location.href), {
+      .register(new URL('./sw.js?v=20', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1148,6 +1536,11 @@ function logout() {
   setEditorFileTitle(null);
   updateSidebarSectionTitle();
   if (state.easyMDE) state.easyMDE.value('');
+  destroyVaultGraphNetwork();
+  state.obsidianBookmarksRaw = null;
+  state.obsidianGraphRaw = null;
+  state.obsidianBookmarkPaths = new Set();
+  switchVaultTab('editor');
 }
 
 function bindUi() {
@@ -1167,9 +1560,22 @@ function bindUi() {
   el.treeSearch = document.getElementById('tree-search');
   el.statusTtlBar = document.getElementById('status-ttl-bar');
   el.statusTtlFill = document.getElementById('status-ttl-fill');
+  el.tabEditor = document.getElementById('tab-editor');
+  el.tabGraph = document.getElementById('tab-graph');
+  el.panelEditor = document.getElementById('panel-editor');
+  el.panelGraph = document.getElementById('panel-graph');
+  el.graphNetwork = document.getElementById('graph-network');
+  el.graphStatus = document.getElementById('graph-status');
+  el.graphConfigDetails = document.getElementById('graph-config-details');
+  el.graphConfigBody = document.getElementById('graph-config-body');
 
   initTheme();
   updateSidebarSectionTitle();
+
+  if (el.tabEditor)
+    el.tabEditor.addEventListener('click', () => switchVaultTab('editor'));
+  if (el.tabGraph)
+    el.tabGraph.addEventListener('click', () => switchVaultTab('graph'));
 
   el.btnTheme.addEventListener('click', toggleTheme);
 
