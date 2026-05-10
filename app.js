@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v20';
+const APP_BUILD = '2026-05-10-v21';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -136,12 +136,21 @@ const el = {
   panelEditor: null,
   panelGraph: null,
   graphNetwork: null,
-  graphStatus: null,
+  headerGraphStatus: null,
   graphConfigDetails: null,
   graphConfigBody: null,
+  btnCloseNote: null,
 };
 
 let saveStatusClearTimer = null;
+
+function setHeaderGraphStatus(text) {
+  if (el.headerGraphStatus) el.headerGraphStatus.textContent = text || '';
+}
+
+function clearHeaderGraphStatus() {
+  setHeaderGraphStatus('');
+}
 
 function setEditorFileTitle(label) {
   if (!el.editorFileTitle) return;
@@ -1172,26 +1181,76 @@ function buildVisNetworkOptions() {
   };
 }
 
+function extractObsidianGraphSettings(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return { search: '', showOrphans: true };
+  }
+  const r = raw;
+  const search = String(
+    r.search ?? r.query ?? r.filter?.search ?? ''
+  ).trim();
+  let showOrphans = true;
+  if (typeof r.showOrphans === 'boolean') showOrphans = r.showOrphans;
+  return { search, showOrphans };
+}
+
+/** Aplica busca e “showOrphans” típicos do graph.json do Obsidian ao conjunto do mapa. */
+function applyObsidianGraphFilters(nodes, edges, raw) {
+  const st = extractObsidianGraphSettings(raw);
+  let outN = nodes.slice();
+  let outE = edges.slice();
+  const notes = [];
+
+  const q = st.search.toLowerCase();
+  if (q) {
+    outN = outN.filter((n) => {
+      const blob = `${n.label || ''} ${n.title || ''}`.toLowerCase();
+      return blob.includes(q);
+    });
+    const ok = new Set(outN.map((n) => n.id));
+    outE = outE.filter((e) => ok.has(e.from) && ok.has(e.to));
+    notes.push(`busca "${st.search}"`);
+  }
+
+  if (st.showOrphans === false) {
+    const connected = new Set();
+    for (const e of outE) {
+      connected.add(e.from);
+      connected.add(e.to);
+    }
+    outN = outN.filter((n) => connected.has(n.id));
+    const ok = new Set(outN.map((n) => n.id));
+    outE = outE.filter((e) => ok.has(e.from) && ok.has(e.to));
+    notes.push('órfãs ocultas');
+  }
+
+  return {
+    nodes: outN,
+    edges: outE,
+    filterNote: notes.length ? notes.join(' · ') : '',
+  };
+}
+
 function renderGraphConfigPanel() {
   if (!el.graphConfigDetails || !el.graphConfigBody) return;
   const lines = [];
   if (state.obsidianBookmarksRaw) {
     lines.push(
-      `bookmarks.json — ${state.obsidianBookmarkPaths.size} caminho(s) reconhecido(s).`
+      `bookmarks.json — ${state.obsidianBookmarkPaths.size} caminho(s) usado(s) para destaque.`
     );
   } else {
     lines.push(
-      'bookmarks.json — não encontrado em .obsidian (o Obsidian pode usar outro nome ou plugin).'
+      'bookmarks.json — não encontrado em .obsidian (nome ou plugin pode mudar).'
     );
   }
   if (state.obsidianGraphRaw) {
     lines.push(
-      '\ngraph.json — conteúdo (filtros/guardados variam por versão Obsidian):\n' +
+      '\ngraph.json — dados brutos (estrutura depende da versão do Obsidian):\n' +
         JSON.stringify(state.obsidianGraphRaw, null, 2)
     );
   } else {
     lines.push(
-      '\ngraph.json — não encontrado. Muitas versões não gravam filtros do grafo neste ficheiro.'
+      '\ngraph.json — não encontrado. Filtros do grafo podem estar só na máquina local.'
     );
   }
   el.graphConfigBody.textContent = lines.join('\n');
@@ -1233,7 +1292,7 @@ async function buildVaultGraphModel() {
     return {
       id: f.id,
       label: shortLabelForGraph(f),
-      title: fullPath + (isBm ? ' · bookmark Obsidian' : ''),
+      title: fullPath + (isBm ? ' · favorito (Obsidian)' : ''),
       color: isBm
         ? { background: th.bookmarkBg, border: th.bookmarkBorder }
         : { background: th.nodeBg, border: th.nodeBorder },
@@ -1270,8 +1329,10 @@ async function buildVaultGraphModel() {
       if (i >= total) break;
       await scanOne(files[i]);
       finishedCount++;
-      if (el.graphStatus && finishedCount % 30 === 0) {
-        el.graphStatus.textContent = `A extrair ligações [[…]]… ${finishedCount}/${total}`;
+      if (el.headerGraphStatus && finishedCount % 25 === 0) {
+        setHeaderGraphStatus(
+          `Extraindo links [[…]] ${finishedCount}/${total}`
+        );
       }
     }
   }
@@ -1282,28 +1343,42 @@ async function buildVaultGraphModel() {
 }
 
 async function refreshVaultGraphView() {
-  if (!el.graphNetwork || !el.graphStatus) return;
+  if (!el.graphNetwork) return;
 
   if (typeof vis === 'undefined' || !vis.Network || !vis.DataSet) {
-    el.graphStatus.textContent =
-      'Biblioteca de mapa (vis-network) não carregou. Verifique a rede ou bloqueios.';
+    setHeaderGraphStatus(
+      'Biblioteca do mapa não carregou. Verifique a rede ou bloqueios.'
+    );
     return;
   }
 
   if (state.vaultGraphBuilding) return;
   state.vaultGraphBuilding = true;
-  el.graphStatus.textContent = 'A preparar mapa…';
+  setHeaderGraphStatus('Preparando mapa…');
 
   try {
     await loadObsidianConfigsForVault();
-    const { nodes, edges } = await buildVaultGraphModel();
+    let { nodes, edges } = await buildVaultGraphModel();
+
+    const filtered = applyObsidianGraphFilters(
+      nodes,
+      edges,
+      state.obsidianGraphRaw
+    );
+    nodes = filtered.nodes;
+    edges = filtered.edges;
 
     const bm = state.obsidianBookmarkPaths.size;
-    el.graphStatus.textContent =
-      nodes.length === 0
-        ? 'Sem notas listadas. Faça login e aguarde a lista do vault.'
-        : `${nodes.length} notas · ${edges.length} ligações` +
-          (bm ? ` · ${bm} bookmark(s) em bookmarks.json` : '');
+    if (nodes.length === 0) {
+      setHeaderGraphStatus(
+        'Nenhuma nota listada. Entre com a conta e aguarde o vault.'
+      );
+    } else {
+      let line = `${nodes.length} notas · ${edges.length} ligações`;
+      if (filtered.filterNote) line += ` · ${filtered.filterNote}`;
+      if (bm) line += ` · ${bm} favorito(s) (bookmarks.json)`;
+      setHeaderGraphStatus(line);
+    }
 
     renderGraphConfigPanel();
 
@@ -1315,12 +1390,14 @@ async function refreshVaultGraphView() {
 
     destroyVaultGraphNetwork();
     state.vaultGraphNetwork = new vis.Network(el.graphNetwork, data, opts);
-    state.vaultGraphNetwork.on('doubleClick', (p) => {
-      if (p.nodes.length) switchToEditorAndOpenNote(p.nodes[0]);
+    state.vaultGraphNetwork.on('click', (p) => {
+      if (p.nodes.length === 1) {
+        switchToEditorAndOpenNote(p.nodes[0]);
+      }
     });
   } catch (e) {
     console.warn(e);
-    el.graphStatus.textContent = e.message || String(e);
+    setHeaderGraphStatus(e.message || String(e));
   } finally {
     state.vaultGraphBuilding = false;
   }
@@ -1339,7 +1416,11 @@ function switchVaultTab(tab) {
   if (el.btnSave) el.btnSave.hidden = !showEditorChrome;
   if (el.btnReloadFile) el.btnReloadFile.hidden = !showEditorChrome;
 
-  if (tab === 'graph') void refreshVaultGraphView();
+  if (tab === 'editor') {
+    clearHeaderGraphStatus();
+  } else {
+    void refreshVaultGraphView();
+  }
 }
 
 function switchToEditorAndOpenNote(fileId) {
@@ -1405,6 +1486,34 @@ async function saveCurrentFile() {
   setSaveStatus('Salvo', { autoClearMs: 3200 });
 }
 
+function closeCurrentNote() {
+  if (state.dirty) {
+    const ok = window.confirm(
+      'Esta nota tem alterações não salvas. Fechar mesmo assim?'
+    );
+    if (!ok) return;
+  }
+  state.currentFile = null;
+  state.dirty = false;
+  setEditorFileTitle(null);
+  if (state.easyMDE) {
+    state.loadingFile = true;
+    state.easyMDE.value('');
+    queueMicrotask(() => {
+      state.loadingFile = false;
+    });
+  }
+  el.btnSave.disabled = true;
+  if (el.btnReloadFile) el.btnReloadFile.disabled = true;
+  if (el.btnCloseNote) el.btnCloseNote.hidden = true;
+  if (el.fileTree) {
+    el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
+      b.classList.remove('is-active')
+    );
+  }
+  setSaveStatus('');
+}
+
 async function reloadCurrentFileFromDrive() {
   if (!state.currentFile || !state.easyMDE) return;
   if (state.dirty) {
@@ -1459,6 +1568,7 @@ async function selectFile(file, btnEl) {
     });
     el.btnSave.disabled = false;
     if (el.btnReloadFile) el.btnReloadFile.disabled = false;
+    if (el.btnCloseNote) el.btnCloseNote.hidden = false;
     setSaveStatus('');
   } catch (e) {
     console.error(e);
@@ -1499,7 +1609,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=20', window.location.href), {
+      .register(new URL('./sw.js?v=21', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1536,6 +1646,7 @@ function logout() {
   setEditorFileTitle(null);
   updateSidebarSectionTitle();
   if (state.easyMDE) state.easyMDE.value('');
+  if (el.btnCloseNote) el.btnCloseNote.hidden = true;
   destroyVaultGraphNetwork();
   state.obsidianBookmarksRaw = null;
   state.obsidianGraphRaw = null;
@@ -1565,9 +1676,10 @@ function bindUi() {
   el.panelEditor = document.getElementById('panel-editor');
   el.panelGraph = document.getElementById('panel-graph');
   el.graphNetwork = document.getElementById('graph-network');
-  el.graphStatus = document.getElementById('graph-status');
+  el.headerGraphStatus = document.getElementById('header-graph-status');
   el.graphConfigDetails = document.getElementById('graph-config-details');
   el.graphConfigBody = document.getElementById('graph-config-body');
+  el.btnCloseNote = document.getElementById('btn-close-note');
 
   initTheme();
   updateSidebarSectionTitle();
@@ -1576,6 +1688,9 @@ function bindUi() {
     el.tabEditor.addEventListener('click', () => switchVaultTab('editor'));
   if (el.tabGraph)
     el.tabGraph.addEventListener('click', () => switchVaultTab('graph'));
+
+  if (el.btnCloseNote)
+    el.btnCloseNote.addEventListener('click', () => closeCurrentNote());
 
   el.btnTheme.addEventListener('click', toggleTheme);
 

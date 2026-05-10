@@ -75,6 +75,25 @@ body {
   max-width: 100%;
 }
 
+.header-graph-status {
+  flex: 1 1 auto;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: right;
+  line-height: 1.35;
+  padding: 0 0.35rem;
+}
+
+@media (max-width: 520px) {
+  .header-graph-status {
+    flex-basis: 100%;
+    text-align: left;
+    order: 10;
+  }
+}
+
 .header-meta-wrap {
   display: flex;
   flex-direction: column;
@@ -276,16 +295,16 @@ html.dark .vault-tab:hover {
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-}
-
-.graph-status {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .graph-config-details {
-  margin-top: 0.5rem;
+  margin-top: 0;
+  flex-shrink: 0;
   font-size: 0.78rem;
   color: var(--muted);
 }
@@ -307,6 +326,22 @@ html.dark .vault-tab:hover {
   font-size: 0.72rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.graph-hint {
+  margin: 0;
+  flex: 1 1 220px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.graph-hint code {
+  font-size: 0.72rem;
+  padding: 0 0.2rem;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
 }
 
 .graph-network {
@@ -523,10 +558,16 @@ html.dark .file-tree .tree-file button.is-active {
   padding: 0.55rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .editor-file-title {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.95rem;
   font-weight: 600;
   line-height: 1.35;
@@ -534,6 +575,29 @@ html.dark .file-tree .tree-file button.is-active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.btn-icon-close {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.btn-icon-close:hover {
+  color: var(--text);
+  border-color: var(--muted);
+  background: var(--bg);
 }
 
 .editor-shell textarea#markdown-editor {
