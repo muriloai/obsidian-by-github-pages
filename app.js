@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v15';
+const APP_BUILD = '2026-05-10-v17';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -308,18 +308,18 @@ function extractAliasesFromMarkdown(text) {
   return [...new Set(out.map((s) => String(s).trim()).filter(Boolean))];
 }
 
+/**
+ * Conteúdo do ficheiro para índice de aliases (só precisamos do início).
+ * Pedidos com Range devolviam 416 no Drive para ficheiros vazios ou nalguns casos — GET completo e cortar em memória.
+ */
 async function getFileContentHead(fileId, maxBytes = 32768) {
   const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
     fileId
   )}?alt=media`;
-  let res = await driveFetch(url, {
-    headers: { Range: `bytes=0-${maxBytes - 1}` },
-  });
-  if (res.status === 416 || res.status === 404) {
-    res = await driveFetch(url);
-  }
+  const res = await driveFetch(url);
   if (!res.ok) throw new Error(await res.text());
-  return res.text();
+  const text = await res.text();
+  return text.length > maxBytes ? text.slice(0, maxBytes) : text;
 }
 
 function registerFileAliasesFromContent(file, text, targetMap = state.aliasHintsByFileId) {
@@ -421,7 +421,7 @@ function buildWikiSuggestions(queryRaw) {
 }
 
 function wikiLinkHint(cm) {
-  const CM = typeof CodeMirror !== 'undefined' ? CodeMirror : cm.constructor;
+  const CM = cm.constructor;
   const Pass = CM.Pass;
   const Pos = CM.Pos;
 
@@ -448,9 +448,28 @@ function wikiLinkHint(cm) {
   };
 }
 
+/** EasyMDE pode usar outra instância CM que o addon registou no global — copiar showHint se faltar. */
+function syncCodeMirrorShowHint(cm) {
+  const EditorCM = cm.constructor;
+  const g = typeof CodeMirror !== 'undefined' ? CodeMirror : null;
+  if (
+    g &&
+    typeof g.showHint === 'function' &&
+    typeof EditorCM.showHint !== 'function'
+  ) {
+    EditorCM.showHint = g.showHint;
+  }
+}
+
 function attachWikiLinkAutocomplete(cm) {
-  const CM = typeof CodeMirror !== 'undefined' ? CodeMirror : cm.constructor;
-  if (!CM || typeof CM.showHint !== 'function') return;
+  syncCodeMirrorShowHint(cm);
+  const CM = cm.constructor;
+  if (!CM || typeof CM.showHint !== 'function') {
+    console.warn(
+      '[Brain Drive] CodeMirror.showHint indisponível — autocomplete [[ desativado.'
+    );
+    return;
+  }
 
   /** inputRead quase só IME; digitação normal usa change — sem change o [[ não abria sugestões. */
   const triggerWiki = debounce(() => {
@@ -1073,7 +1092,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=15', window.location.href), {
+      .register(new URL('./sw.js?v=17', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
