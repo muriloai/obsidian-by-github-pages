@@ -9,7 +9,7 @@
 const CONFIG = {
   CLIENT_ID:
     '1096778565225-ucf7kcnrap9qnledd3cbugdoi5t3k1hc.apps.googleusercontent.com',
-  BRAIN_FOLDER_ID: 'SEU_FOLDER_ID',
+  BRAIN_FOLDER_ID: '1vTkjJSKbVZ1Swn7jfoh3IrJuG3E8Shhz',
 };
 
 const SCOPES =
