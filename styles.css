@@ -576,6 +576,46 @@ html.dark .file-tree .tree-file button.is-active {
   min-width: 0;
 }
 
+.note-title-block {
+  flex-shrink: 0;
+  padding: 1rem 1.25rem 0.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.note-title-input {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.65rem 0.85rem;
+  font-size: 1.65rem;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--bg);
+  font-family: inherit;
+}
+
+.note-title-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.note-title-input::placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.note-title-sep {
+  margin: 0.85rem 0 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
 .editor-file-title {
   margin: 0;
   flex: 1 1 auto;
@@ -703,6 +743,14 @@ html.dark li.CodeMirror-hint-active {
 .editor-shell .EasyMDEContainer .editor-toolbar button.active {
   background: rgba(37, 99, 235, 0.12);
   border-color: transparent;
+}
+
+.editor-shell .EasyMDEContainer .editor-toolbar button.easymde-btn-duplicate {
+  margin-left: auto;
+}
+
+.editor-shell .EasyMDEContainer .editor-toolbar button.easymde-btn-duplicate[hidden] {
+  display: none !important;
 }
 
 html.dark .editor-shell .EasyMDEContainer .editor-toolbar button:hover,

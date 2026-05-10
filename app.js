@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v23';
+const APP_BUILD = '2026-05-10-v25';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -67,6 +67,9 @@ const state = {
   obsidianGraphRaw: null,
   /** Caminhos normalizados vindos de .obsidian/bookmarks.json */
   obsidianBookmarkPaths: new Set(),
+  /** Cache da extração [[…]] (invalidado quando a lista ou o conteúdo relevante mudam). */
+  vaultGraphLinkCache: null,
+  vaultGraphRefreshQueued: false,
 };
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -80,6 +83,9 @@ const MSG_SWITCH_NOTE_UNSAVED =
   'Esta nota tem alterações não salvas.\n\n' +
   'Ao abrir outra nota, essas alterações serão descartadas (use Salvar antes se precisar enviar ao Drive).\n\n' +
   'Continuar?';
+
+/** Caracteres não permitidos em nome de ficheiro no Windows / Drive. */
+const INVALID_NOTE_FILENAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/g;
 
 const tokenWaiters = [];
 
@@ -140,9 +146,12 @@ const el = {
   graphLoadingStatus: null,
   headerGraphStatus: null,
   btnCloseNote: null,
+  noteTitleBlock: null,
+  noteTitleInput: null,
 };
 
 let saveStatusClearTimer = null;
+let graphResizeObserver = null;
 
 function setHeaderGraphStatus(text) {
   if (el.headerGraphStatus) el.headerGraphStatus.textContent = text || '';
@@ -162,9 +171,14 @@ function setGraphProgress(text) {
   if (el.graphLoadingStatus) el.graphLoadingStatus.textContent = text || '';
 }
 
-function syncCloseNoteVisibility() {
-  if (!el.btnCloseNote) return;
-  el.btnCloseNote.hidden = !state.currentFile;
+function syncEditorChromeVisibility() {
+  if (el.btnCloseNote) el.btnCloseNote.hidden = !state.currentFile;
+  const has = Boolean(state.currentFile);
+  if (el.noteTitleBlock) el.noteTitleBlock.hidden = !has;
+  if (el.noteTitleInput && !has) el.noteTitleInput.value = '';
+  document.querySelectorAll('.easymde-btn-duplicate').forEach((btn) => {
+    btn.hidden = !has;
+  });
 }
 
 function setEditorFileTitle(label) {
@@ -208,6 +222,192 @@ function normalizePathLabel(label) {
     .replace(/\/+/g, '/')
     .replace(/^\/+|\/+$/g, '')
     .trim();
+}
+
+function noteStemFromFile(file) {
+  if (!file) return '';
+  const label = normalizePathLabel(file._listLabel || file.name);
+  const base = label.split('/').pop() || file.name || '';
+  return base.replace(/\.md$/i, '');
+}
+
+function sanitizeNoteFileStem(raw) {
+  let s = String(raw || '')
+    .trim()
+    .replace(INVALID_NOTE_FILENAME_CHARS, '')
+    .replace(/^\.+|\.+$/g, '')
+    .trim();
+  if (!s) s = 'sem-titulo';
+  if (/^(con|prn|aux|nul)$/i.test(s) || /^com[1-9]$/i.test(s) || /^lpt[1-9]$/i.test(s))
+    s = `${s}_`;
+  return s.slice(0, 180);
+}
+
+function computeVaultListSignature(files) {
+  if (!files?.length) return 'empty';
+  return files
+    .map((f) =>
+      [
+        f.id,
+        f.modifiedTime || '',
+        f.name || '',
+        normalizePathLabel(f._listLabel || ''),
+      ].join('\t')
+    )
+    .sort()
+    .join('|');
+}
+
+function invalidateVaultGraphLinkCache() {
+  state.vaultGraphLinkCache = null;
+}
+
+function updateFileInLastList(updated) {
+  const i = state.lastFileList.findIndex((f) => f.id === updated.id);
+  if (i >= 0) state.lastFileList[i] = { ...state.lastFileList[i], ...updated };
+}
+
+function rerenderFileTreeFromState() {
+  const files = state.lastFileList || [];
+  if ((el.treeSearch?.value || '').trim()) applyTreeFilter();
+  else renderFileTree(files, { expandAll: false, isFiltered: false });
+}
+
+async function fetchDriveFileMeta(fileId) {
+  const params = new URLSearchParams({
+    fields: 'id,name,parents,modifiedTime,mimeType',
+  });
+  if (CONFIG.BRAIN_IN_SHARED_DRIVE) params.set('supportsAllDrives', 'true');
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function renameDriveFile(fileId, newName) {
+  const params = new URLSearchParams();
+  if (CONFIG.BRAIN_IN_SHARED_DRIVE) params.set('supportsAllDrives', 'true');
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json().catch(() => ({}));
+}
+
+async function copyDriveFile(fileId, name, parents) {
+  const params = new URLSearchParams();
+  if (CONFIG.BRAIN_IN_SHARED_DRIVE) params.set('supportsAllDrives', 'true');
+  const body = { name };
+  if (parents && parents.length) body.parents = parents;
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/copy?${params}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function pickDuplicateFilename(sourceFile) {
+  const label = normalizePathLabel(sourceFile._listLabel || sourceFile.name);
+  const parts = label.split('/').filter(Boolean);
+  const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+  const baseStem = parts[parts.length - 1].replace(/\.md$/i, '');
+  const siblingLower = new Set(
+    (state.lastFileList || [])
+      .filter((f) => {
+        const L = normalizePathLabel(f._listLabel || f.name);
+        const d = L.includes('/') ? L.replace(/\/[^/]+$/, '') : '';
+        return d === dir;
+      })
+      .map((f) =>
+        (
+          normalizePathLabel(f._listLabel || f.name).split('/').pop() || ''
+        ).toLowerCase()
+      )
+  );
+  let n = 2;
+  let nameFile;
+  do {
+    nameFile = `${baseStem} ${n}.md`;
+    if (!siblingLower.has(nameFile.toLowerCase())) break;
+    n++;
+  } while (n < 6000);
+  return nameFile;
+}
+
+async function duplicateCurrentNote() {
+  if (!state.currentFile || !state.easyMDE) return;
+  if (state.dirty) {
+    const ok = window.confirm(
+      'A nota tem alterações não salvas. Salvar antes de duplicar?'
+    );
+    if (!ok) return;
+    try {
+      await saveCurrentFile();
+    } catch (e) {
+      console.error(e);
+      setSaveStatus('Erro ao salvar antes de duplicar');
+      return;
+    }
+  }
+  const src = state.currentFile;
+  setSaveStatus('Duplicando…');
+  try {
+    const meta = await fetchDriveFileMeta(src.id);
+    const parents = meta.parents || [];
+    const newName = pickDuplicateFilename(src);
+    const created = await copyDriveFile(src.id, newName, parents);
+    invalidateVaultGraphLinkCache();
+    await refreshFileList();
+    const nf = state.lastFileList.find((f) => f.id === created.id);
+    if (nf) await selectFile(nf, null);
+    setSaveStatus('Nota duplicada', { autoClearMs: 3200 });
+  } catch (e) {
+    console.error(e);
+    setSaveStatus('Erro ao duplicar');
+  }
+}
+
+function scheduleVaultGraphFit() {
+  requestAnimationFrame(() => {
+    try {
+      state.vaultGraphNetwork?.fit({ animation: false });
+    } catch (_) {
+      /* ignore */
+    }
+    requestAnimationFrame(() => {
+      try {
+        state.vaultGraphNetwork?.redraw();
+        state.vaultGraphNetwork?.fit({ animation: false });
+      } catch (_) {
+        /* ignore */
+      }
+    });
+  });
+}
+
+function ensureVaultGraphResizeObserver() {
+  if (graphResizeObserver || !el.graphNetwork) return;
+  graphResizeObserver = new ResizeObserver(() => {
+    if (state.vaultMainTab !== 'graph' || !state.vaultGraphNetwork) return;
+    try {
+      state.vaultGraphNetwork.redraw();
+      state.vaultGraphNetwork.fit({ animation: false });
+    } catch (_) {
+      /* ignore */
+    }
+  });
+  graphResizeObserver.observe(el.graphNetwork);
 }
 
 function hideStatusTtlBar() {
@@ -986,6 +1186,7 @@ async function refreshFileList() {
       'Tempo esgotado ao listar o Drive. Verifique a rede e use Recarregar.'
     );
     state.lastFileList = files;
+    invalidateVaultGraphLinkCache();
     if ((el.treeSearch?.value || '').trim()) {
       applyTreeFilter();
     } else {
@@ -1257,16 +1458,10 @@ function destroyVaultGraphNetwork() {
   }
 }
 
-async function buildVaultGraphModel() {
-  const files = state.lastFileList || [];
+function buildVaultGraphNodes(files) {
   const th = getVaultGraphThemeColors();
   const bp = state.obsidianBookmarkPaths;
-
-  if (!files.length) return { nodes: [], edges: [] };
-
-  const stemMap = buildStemToFilesMap(files);
-
-  const nodes = files.map((f) => {
+  return files.map((f) => {
     const fullPath = normalizePathLabel(f._listLabel || f.name);
     const pathLow = fullPath.toLowerCase();
     let isBm = bp.has(fullPath) || bp.has(pathLow);
@@ -1287,7 +1482,9 @@ async function buildVaultGraphModel() {
         : { background: th.nodeBg, border: th.nodeBorder },
     };
   });
+}
 
+async function extractVaultGraphEdges(files, stemMap) {
   const edgeSeen = new Set();
   const edges = [];
   let nextFileIndex = 0;
@@ -1325,7 +1522,15 @@ async function buildVaultGraphModel() {
   }
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return edges;
+}
 
+async function buildVaultGraphModel() {
+  const files = state.lastFileList || [];
+  if (!files.length) return { nodes: [], edges: [] };
+  const stemMap = buildStemToFilesMap(files);
+  const nodes = buildVaultGraphNodes(files);
+  const edges = await extractVaultGraphEdges(files, stemMap);
   return { nodes, edges };
 }
 
@@ -1339,19 +1544,48 @@ async function refreshVaultGraphView() {
     return;
   }
 
-  if (state.vaultGraphBuilding) return;
+  if (state.vaultGraphBuilding) {
+    state.vaultGraphRefreshQueued = true;
+    return;
+  }
 
   state.vaultGraphBuilding = true;
   showGraphLoading(true);
   setGraphProgress('Preparando mapa…');
+  /** Evita mostrar mensagens antigas (ex.: lista vazia) no topo durante o carregamento. */
+  clearHeaderGraphStatus();
   destroyVaultGraphNetwork();
 
   try {
     setGraphProgress('Carregando bookmarks e filtros (.obsidian)…');
     await loadObsidianConfigsForVault();
 
-    setGraphProgress('Construindo notas e extraindo links [[…]]…');
-    let { nodes, edges } = await buildVaultGraphModel();
+    const files = state.lastFileList || [];
+    const sig = computeVaultListSignature(files);
+    let nodes;
+    let edges;
+
+    if (
+      state.vaultGraphLinkCache &&
+      state.vaultGraphLinkCache.sig === sig &&
+      Array.isArray(state.vaultGraphLinkCache.edges)
+    ) {
+      setGraphProgress('Montando mapa (ligações em cache)…');
+      nodes = buildVaultGraphNodes(files);
+      edges = state.vaultGraphLinkCache.edges.map((e) => ({
+        from: e.from,
+        to: e.to,
+      }));
+    } else {
+      setGraphProgress('Construindo notas e extraindo links [[…]]…');
+      const built = await buildVaultGraphModel();
+      nodes = built.nodes;
+      edges = built.edges;
+      state.vaultGraphLinkCache = {
+        sig,
+        edges: edges.map((e) => ({ from: e.from, to: e.to })),
+      };
+    }
 
     const filtered = applyObsidianGraphFilters(
       nodes,
@@ -1363,9 +1597,15 @@ async function refreshVaultGraphView() {
 
     const bm = state.obsidianBookmarkPaths.size;
     if (nodes.length === 0) {
-      setHeaderGraphStatus(
-        'Nenhuma nota listada. Entre com a conta e aguarde o vault.'
-      );
+      if (!files.length) {
+        setHeaderGraphStatus(
+          'Nenhuma nota listada. Entre com a conta e aguarde o vault.'
+        );
+      } else {
+        setHeaderGraphStatus(
+          'Nenhuma nota visível após os filtros do graph.json (busca ou órfãs). Ajuste no Obsidian ou altere graph.json.'
+        );
+      }
     } else {
       let line = `${nodes.length} notas · ${edges.length} ligações`;
       if (filtered.filterNote) line += ` · ${filtered.filterNote}`;
@@ -1385,6 +1625,7 @@ async function refreshVaultGraphView() {
         switchToEditorAndOpenNote(p.nodes[0]);
       }
     });
+    scheduleVaultGraphFit();
   } catch (e) {
     console.warn(e);
     const msg = e.message || String(e);
@@ -1393,6 +1634,10 @@ async function refreshVaultGraphView() {
   } finally {
     state.vaultGraphBuilding = false;
     showGraphLoading(false);
+    if (state.vaultGraphRefreshQueued) {
+      state.vaultGraphRefreshQueued = false;
+      queueMicrotask(() => void refreshVaultGraphView());
+    }
   }
 }
 
@@ -1424,7 +1669,11 @@ function switchVaultTab(tab) {
   if (tab === 'editor') {
     clearHeaderGraphStatus();
   } else {
-    void refreshVaultGraphView();
+    clearHeaderGraphStatus();
+    ensureVaultGraphResizeObserver();
+    void refreshVaultGraphView().then(() => {
+      if (state.vaultMainTab === 'graph') scheduleVaultGraphFit();
+    });
   }
 }
 
@@ -1480,13 +1729,37 @@ async function patchFileContents(fileId, fileName, content) {
 
 async function saveCurrentFile() {
   if (!state.currentFile || !state.easyMDE) return;
+  let file = state.currentFile;
   const content = state.easyMDE.value();
+  const stem = sanitizeNoteFileStem(el.noteTitleInput?.value ?? '');
+  const targetName = `${stem}.md`;
+
+  if (targetName !== file.name) {
+    setSaveStatus('Renomeando…');
+    await renameDriveFile(file.id, targetName);
+    const label = file._listLabel;
+    let newLabel = label;
+    if (label && label.includes('/')) {
+      const parts = label.split('/');
+      parts[parts.length - 1] = targetName;
+      newLabel = parts.join('/');
+    } else {
+      newLabel = targetName;
+    }
+    file = {
+      ...file,
+      name: targetName,
+      _listLabel: newLabel,
+    };
+    updateFileInLastList(file);
+    state.currentFile = file;
+    setEditorFileTitle(file._listLabel || file.name);
+    rerenderFileTreeFromState();
+  }
+
   setSaveStatus('Salvando…');
-  await patchFileContents(
-    state.currentFile.id,
-    state.currentFile.name,
-    content
-  );
+  await patchFileContents(file.id, file.name, content);
+  invalidateVaultGraphLinkCache();
   state.dirty = false;
   setSaveStatus('Salvo', { autoClearMs: 3200 });
 }
@@ -1501,6 +1774,7 @@ function closeCurrentNote() {
   state.currentFile = null;
   state.dirty = false;
   setEditorFileTitle(null);
+  if (el.noteTitleInput) el.noteTitleInput.value = '';
   if (state.easyMDE) {
     state.loadingFile = true;
     state.easyMDE.value('');
@@ -1510,7 +1784,7 @@ function closeCurrentNote() {
   }
   el.btnSave.disabled = true;
   if (el.btnReloadFile) el.btnReloadFile.disabled = true;
-  syncCloseNoteVisibility();
+  syncEditorChromeVisibility();
   if (el.fileTree) {
     el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
       b.classList.remove('is-active')
@@ -1530,6 +1804,8 @@ async function reloadCurrentFileFromDrive() {
     const text = await getFileContent(state.currentFile.id);
     state.loadingFile = true;
     state.easyMDE.value(text);
+    if (el.noteTitleInput)
+      el.noteTitleInput.value = noteStemFromFile(state.currentFile);
     queueMicrotask(() => {
       state.loadingFile = false;
       state.dirty = false;
@@ -1562,6 +1838,8 @@ async function selectFile(file, btnEl) {
 
     state.currentFile = file;
     setEditorFileTitle(file._listLabel || file.name);
+    if (el.noteTitleInput)
+      el.noteTitleInput.value = noteStemFromFile(file);
     setSaveStatus('Abrindo…');
     const text = await getFileContent(file.id);
     registerFileAliasesFromContent(file, text);
@@ -1573,13 +1851,14 @@ async function selectFile(file, btnEl) {
     });
     el.btnSave.disabled = false;
     if (el.btnReloadFile) el.btnReloadFile.disabled = false;
-    syncCloseNoteVisibility();
+    syncEditorChromeVisibility();
     setSaveStatus('');
   } catch (e) {
     console.error(e);
     state.currentFile = null;
     setEditorFileTitle(null);
-    syncCloseNoteVisibility();
+    if (el.noteTitleInput) el.noteTitleInput.value = '';
+    syncEditorChromeVisibility();
     if (el.fileTree) {
       el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
         b.classList.remove('is-active')
@@ -1622,7 +1901,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=23', window.location.href), {
+      .register(new URL('./sw.js?v=25', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1658,12 +1937,14 @@ function logout() {
   setListLoading(false);
   setEditorFileTitle(null);
   updateSidebarSectionTitle();
+  if (el.noteTitleInput) el.noteTitleInput.value = '';
   if (state.easyMDE) state.easyMDE.value('');
-  syncCloseNoteVisibility();
+  syncEditorChromeVisibility();
   destroyVaultGraphNetwork();
   state.obsidianBookmarksRaw = null;
   state.obsidianGraphRaw = null;
   state.obsidianBookmarkPaths = new Set();
+  invalidateVaultGraphLinkCache();
   switchVaultTab('editor');
 }
 
@@ -1693,6 +1974,8 @@ function bindUi() {
   el.graphLoadingStatus = document.getElementById('graph-loading-status');
   el.headerGraphStatus = document.getElementById('header-graph-status');
   el.btnCloseNote = document.getElementById('btn-close-note');
+  el.noteTitleBlock = document.getElementById('note-title-block');
+  el.noteTitleInput = document.getElementById('note-title-input');
 
   initTheme();
   updateSidebarSectionTitle();
@@ -1705,6 +1988,14 @@ function bindUi() {
 
   if (el.btnCloseNote)
     el.btnCloseNote.addEventListener('click', () => closeCurrentNote());
+
+  if (el.noteTitleInput) {
+    el.noteTitleInput.addEventListener('input', () => {
+      if (state.loadingFile || !state.currentFile) return;
+      state.dirty = true;
+      setSaveStatus('Alterações não salvas');
+    });
+  }
 
   el.btnTheme.addEventListener('click', toggleTheme);
 
@@ -1754,6 +2045,33 @@ function bindUi() {
     element: document.getElementById('markdown-editor'),
     spellChecker: false,
     status: false,
+    toolbar: [
+      'bold',
+      'italic',
+      'heading',
+      '|',
+      'quote',
+      'unordered-list',
+      'ordered-list',
+      '|',
+      'link',
+      'image',
+      '|',
+      'preview',
+      'side-by-side',
+      'fullscreen',
+      '|',
+      'guide',
+      '|',
+      {
+        name: 'duplicate',
+        action: () => {
+          void duplicateCurrentNote();
+        },
+        className: 'fa fa-files-o easymde-btn-duplicate',
+        title: 'Duplicar nota',
+      },
+    ],
     placeholder: 'Abra uma nota pelo Mapa ou na lista ao lado.',
     /* Font Awesome 4 já é carregado no index.html (CDN); evita duplicar ou falhar no auto-download */
     autoDownloadFontAwesome: false,
@@ -1767,7 +2085,8 @@ function bindUi() {
 
   attachWikiLinkAutocomplete(state.easyMDE.codemirror);
 
-  syncCloseNoteVisibility();
+  syncEditorChromeVisibility();
+  queueMicrotask(() => syncEditorChromeVisibility());
 
   setListLoading(false);
   registerServiceWorker();
