@@ -1,12 +1,12 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v21';
+const APP_BUILD = '2026-05-10-v22';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
 const WIKI_LINK_MIN_CHARS = 1;
 
 const UI_EDITOR_EMPTY_TITLE =
-  'Editor | selecione um arquivo na lista ao lado';
+  'Editor | abra uma nota pelo Mapa ou em Pastas';
 
 /**
  * Configuração (repositório / GitHub Pages público)
@@ -60,6 +60,8 @@ const state = {
   aliasHintsByFileId: new Map(),
   /** 'editor' | 'graph' — abas Editor / Mapa */
   vaultMainTab: 'editor',
+  /** Painel Pastas visível (aba Editor). */
+  vaultSidebarOpen: false,
   /** Instância vis-network do mapa do vault */
   vaultGraphNetwork: null,
   vaultGraphBuilding: false,
@@ -140,6 +142,7 @@ const el = {
   graphConfigDetails: null,
   graphConfigBody: null,
   btnCloseNote: null,
+  btnVaultSidebar: null,
 };
 
 let saveStatusClearTimer = null;
@@ -1403,6 +1406,24 @@ async function refreshVaultGraphView() {
   }
 }
 
+function syncVaultSidebarForTab() {
+  if (!el.sidebar) return;
+  if (state.vaultMainTab === 'graph') {
+    el.sidebar.hidden = true;
+    if (el.btnVaultSidebar) el.btnVaultSidebar.hidden = true;
+    return;
+  }
+  el.sidebar.hidden = false;
+  el.sidebar.classList.toggle('sidebar--collapsed', !state.vaultSidebarOpen);
+  if (el.btnVaultSidebar) {
+    el.btnVaultSidebar.hidden = false;
+    el.btnVaultSidebar.setAttribute(
+      'aria-expanded',
+      state.vaultSidebarOpen ? 'true' : 'false'
+    );
+  }
+}
+
 function switchVaultTab(tab) {
   if (tab !== 'editor' && tab !== 'graph') return;
   state.vaultMainTab = tab;
@@ -1415,6 +1436,8 @@ function switchVaultTab(tab) {
   const showEditorChrome = tab === 'editor';
   if (el.btnSave) el.btnSave.hidden = !showEditorChrome;
   if (el.btnReloadFile) el.btnReloadFile.hidden = !showEditorChrome;
+
+  syncVaultSidebarForTab();
 
   if (tab === 'editor') {
     clearHeaderGraphStatus();
@@ -1609,7 +1632,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=21', window.location.href), {
+      .register(new URL('./sw.js?v=22', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1680,14 +1703,23 @@ function bindUi() {
   el.graphConfigDetails = document.getElementById('graph-config-details');
   el.graphConfigBody = document.getElementById('graph-config-body');
   el.btnCloseNote = document.getElementById('btn-close-note');
+  el.btnVaultSidebar = document.getElementById('btn-vault-sidebar');
 
   initTheme();
   updateSidebarSectionTitle();
+  syncVaultSidebarForTab();
 
   if (el.tabEditor)
     el.tabEditor.addEventListener('click', () => switchVaultTab('editor'));
   if (el.tabGraph)
     el.tabGraph.addEventListener('click', () => switchVaultTab('graph'));
+
+  if (el.btnVaultSidebar) {
+    el.btnVaultSidebar.addEventListener('click', () => {
+      state.vaultSidebarOpen = !state.vaultSidebarOpen;
+      syncVaultSidebarForTab();
+    });
+  }
 
   if (el.btnCloseNote)
     el.btnCloseNote.addEventListener('click', () => closeCurrentNote());
@@ -1740,7 +1772,7 @@ function bindUi() {
     element: document.getElementById('markdown-editor'),
     spellChecker: false,
     status: false,
-    placeholder: 'Selecione um arquivo .md na lista ao lado.',
+    placeholder: 'Abra uma nota pelo Mapa ou pelo botão Pastas.',
     /* Font Awesome 4 já é carregado no index.html (CDN); evita duplicar ou falhar no auto-download */
     autoDownloadFontAwesome: false,
   });

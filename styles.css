@@ -268,17 +268,49 @@ html.dark .vault-tab:hover {
   border-bottom-color: var(--bg);
 }
 
+.vault-sidebar-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.vault-sidebar-toggle:hover {
+  border-color: var(--muted);
+}
+
+.vault-sidebar-toggle[hidden] {
+  display: none !important;
+}
+
 .app-main {
   flex: 1;
   display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}
+
+.workspace {
+  flex: 1 1 auto;
+  display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
 .panel-editor {
   flex: 1;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   min-height: 0;
 }
 
@@ -358,6 +390,20 @@ html.dark .vault-tab:hover {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  transition: width 0.18s ease, opacity 0.18s ease, border-color 0.18s ease;
+}
+
+.sidebar.sidebar--collapsed {
+  width: 0;
+  min-width: 0;
+  border-right-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sidebar[hidden] {
+  display: none !important;
 }
 
 .sidebar-head {
@@ -775,14 +821,20 @@ html.dark .editor-shell .EasyMDEContainer .editor-preview table tr:nth-child(2n)
 }
 
 @media (max-width: 720px) {
-  .panel-editor {
+  .app-main {
     flex-direction: column;
   }
 
-  .sidebar {
+  .sidebar:not(.sidebar--collapsed):not([hidden]) {
     width: 100%;
-    max-height: 40vh;
+    max-height: 42vh;
+    opacity: 1;
+    pointer-events: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
+  }
+
+  .vault-sidebar-toggle {
+    margin-left: 0;
   }
 }
