@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v25';
+const APP_BUILD = '2026-05-10-v26';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -70,6 +70,8 @@ const state = {
   /** Cache da extração [[…]] (invalidado quando a lista ou o conteúdo relevante mudam). */
   vaultGraphLinkCache: null,
   vaultGraphRefreshQueued: false,
+  /** Evita reler .obsidian ao mudar só de aba Editor ↔ Mapa. */
+  obsidianConfigsLoaded: false,
 };
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -146,8 +148,11 @@ const el = {
   graphLoadingStatus: null,
   headerGraphStatus: null,
   btnCloseNote: null,
+  btnDuplicateNote: null,
+  btnDeleteNote: null,
   noteTitleBlock: null,
   noteTitleInput: null,
+  graphBookmarkSelect: null,
 };
 
 let saveStatusClearTimer = null;
@@ -172,13 +177,12 @@ function setGraphProgress(text) {
 }
 
 function syncEditorChromeVisibility() {
-  if (el.btnCloseNote) el.btnCloseNote.hidden = !state.currentFile;
   const has = Boolean(state.currentFile);
+  if (el.btnCloseNote) el.btnCloseNote.hidden = !has;
+  if (el.btnDuplicateNote) el.btnDuplicateNote.hidden = !has;
+  if (el.btnDeleteNote) el.btnDeleteNote.hidden = !has;
   if (el.noteTitleBlock) el.noteTitleBlock.hidden = !has;
   if (el.noteTitleInput && !has) el.noteTitleInput.value = '';
-  document.querySelectorAll('.easymde-btn-duplicate').forEach((btn) => {
-    btn.hidden = !has;
-  });
 }
 
 function setEditorFileTitle(label) {
@@ -262,6 +266,10 @@ function invalidateVaultGraphLinkCache() {
   state.vaultGraphLinkCache = null;
 }
 
+function invalidateObsidianConfigCache() {
+  state.obsidianConfigsLoaded = false;
+}
+
 function updateFileInLastList(updated) {
   const i = state.lastFileList.findIndex((f) => f.id === updated.id);
   if (i >= 0) state.lastFileList[i] = { ...state.lastFileList[i], ...updated };
@@ -343,6 +351,51 @@ function pickDuplicateFilename(sourceFile) {
     n++;
   } while (n < 6000);
   return nameFile;
+}
+
+async function trashDriveFile(fileId) {
+  const params = new URLSearchParams();
+  if (CONFIG.BRAIN_IN_SHARED_DRIVE) params.set('supportsAllDrives', 'true');
+  const res = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params}`,
+    { method: 'DELETE' }
+  );
+  if (!res.ok && res.status !== 404) {
+    const t = await res.text();
+    throw new Error(t || `DELETE ${res.status}`);
+  }
+}
+
+async function deleteCurrentNote() {
+  if (!state.currentFile) return;
+  const label = state.currentFile._listLabel || state.currentFile.name;
+  if (state.dirty) {
+    const ok = window.confirm(
+      'Esta nota tem alterações não salvas. Eliminar no Drive mesmo assim?'
+    );
+    if (!ok) return;
+  } else {
+    const ok = window.confirm(
+      `Eliminar esta nota no Google Drive (ficheiro vai para o lixo)?\n\n${label}`
+    );
+    if (!ok) return;
+  }
+  const id = state.currentFile.id;
+  setSaveStatus('A eliminar…');
+  try {
+    await trashDriveFile(id);
+    invalidateVaultGraphLinkCache();
+    invalidateObsidianConfigCache();
+    state.lastFileList = state.lastFileList.filter((f) => f.id !== id);
+    state.aliasHintsByFileId.delete(id);
+    closeCurrentNote();
+    rerenderFileTreeFromState();
+    setSaveStatus('Nota enviada para o lixo do Drive', { autoClearMs: 3800 });
+    if (state.vaultMainTab === 'graph') void refreshVaultGraphView();
+  } catch (e) {
+    console.error(e);
+    setSaveStatus('Erro ao eliminar');
+  }
 }
 
 async function duplicateCurrentNote() {
@@ -1187,6 +1240,7 @@ async function refreshFileList() {
     );
     state.lastFileList = files;
     invalidateVaultGraphLinkCache();
+    invalidateObsidianConfigCache();
     if ((el.treeSearch?.value || '').trim()) {
       applyTreeFilter();
     } else {
@@ -1245,17 +1299,86 @@ function collectBookmarkPathsFromObsidianJson(data, intoSet) {
   walk(data?.items ?? data);
 }
 
-async function loadObsidianConfigsForVault() {
+function syncGraphContextBarVisible() {
+  const bar = document.getElementById('graph-context-bar');
+  const sel = el.graphBookmarkSelect || document.getElementById('graph-bookmark-select');
+  if (!bar || !sel) return;
+  bar.hidden = sel.options.length <= 1;
+}
+
+function flattenObsidianBookmarksForMenu(raw) {
+  const out = [];
+  function walk(node, depth) {
+    if (!node || depth > 40) return;
+    if (Array.isArray(node)) {
+      node.forEach((x) => walk(x, depth + 1));
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const type = node.type;
+    const title =
+      (typeof node.title === 'string' && node.title.trim()) ||
+      (typeof node.path === 'string' && node.path.split('/').pop()) ||
+      'Marcador';
+    if (type === 'folder' && typeof node.path === 'string') {
+      const px = normalizePathLabel(node.path).replace(/\/+$/g, '');
+      if (px) out.push({ title, pathPrefix: px });
+    } else if (type === 'file' && typeof node.path === 'string') {
+      const pl = normalizePathLabel(node.path);
+      const parent = pl.includes('/') ? pl.replace(/\/[^/]+$/, '') : '';
+      if (parent) out.push({ title: `${title} (pasta)`, pathPrefix: parent });
+      else out.push({ title, pathPrefix: pl.replace(/\.md$/i, '') });
+    }
+    if (node.items) walk(node.items, depth + 1);
+    if (node.children) walk(node.children, depth + 1);
+  }
+  walk(raw?.items ?? raw, 0);
+  const seen = new Set();
+  return out.filter((e) => {
+    const k = `${e.pathPrefix}\0${e.title}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function populateGraphBookmarkSelect() {
+  const sel = el.graphBookmarkSelect || document.getElementById('graph-bookmark-select');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = 'Nenhum (só filtros do graph.json)';
+  sel.appendChild(opt0);
+  for (const e of flattenObsidianBookmarksForMenu(state.obsidianBookmarksRaw)) {
+    const o = document.createElement('option');
+    o.value = e.pathPrefix;
+    o.textContent = e.title;
+    sel.appendChild(o);
+  }
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  else sel.value = '';
+  syncGraphContextBarVisible();
+}
+
+async function loadObsidianConfigsFromDrive() {
   state.obsidianBookmarksRaw = null;
   state.obsidianGraphRaw = null;
   state.obsidianBookmarkPaths = new Set();
 
   const root = getBrainFolderId();
-  if (!root || !state.accessToken) return;
+  if (!root || !state.accessToken) {
+    populateGraphBookmarkSelect();
+    return;
+  }
 
   try {
     const obsId = await findChildFolderId(root, '.obsidian');
-    if (!obsId) return;
+    if (!obsId) {
+      populateGraphBookmarkSelect();
+      return;
+    }
 
     const bm = await findFileInFolder(obsId, 'bookmarks.json');
     if (bm) {
@@ -1275,6 +1398,13 @@ async function loadObsidianConfigsForVault() {
   } catch (e) {
     console.warn('[Brain Drive] .obsidian', e);
   }
+  populateGraphBookmarkSelect();
+}
+
+async function ensureObsidianConfigsLoaded() {
+  if (state.obsidianConfigsLoaded) return;
+  await loadObsidianConfigsFromDrive();
+  state.obsidianConfigsLoaded = true;
 }
 
 function shortLabelForGraph(f) {
@@ -1402,31 +1532,132 @@ function extractObsidianGraphSettings(raw) {
     return { search: '', showOrphans: true };
   }
   const r = raw;
-  const search = String(
-    r.search ?? r.query ?? r.filter?.search ?? ''
-  ).trim();
+  let search = '';
+  const candidates = [
+    typeof r.search === 'string' ? r.search : null,
+    typeof r.query === 'string' ? r.query : null,
+    r.filter && typeof r.filter === 'object' && typeof r.filter.search === 'string'
+      ? r.filter.search
+      : null,
+    r.filters && typeof r.filters === 'object' && typeof r.filters.search === 'string'
+      ? r.filters.search
+      : null,
+  ];
+  for (const c of candidates) {
+    if (c && String(c).trim()) {
+      search = String(c).trim();
+      break;
+    }
+  }
   let showOrphans = true;
   if (typeof r.showOrphans === 'boolean') showOrphans = r.showOrphans;
   return { search, showOrphans };
 }
 
-/** Aplica busca e “showOrphans” típicos do graph.json do Obsidian ao conjunto do mapa. */
-function applyObsidianGraphFilters(nodes, edges, raw) {
-  const st = extractObsidianGraphSettings(raw);
-  let outN = nodes.slice();
+/** Extrai cláusulas path: e texto livre do campo search do Obsidian (ex.: path:"Pasta/Sub"). */
+function parseObsidianGraphQuery(searchRaw) {
+  let rest = String(searchRaw || '');
+  const pathNeedles = [];
+
+  rest = rest.replace(/path:\s*"([^"]*)"\s*/gi, (_, p) => {
+    const t = (p || '').trim();
+    if (t) pathNeedles.push(t);
+    return ' ';
+  });
+  rest = rest.replace(/path:\s*'([^']*)'\s*/gi, (_, p) => {
+    const t = (p || '').trim();
+    if (t) pathNeedles.push(t);
+    return ' ';
+  });
+  rest = rest.replace(/path:\s*"([^"]+)/gi, (_, p) => {
+    const t = (p || '').trim();
+    if (t) pathNeedles.push(t);
+    return ' ';
+  });
+  rest = rest.replace(/path:\s*([^\s"']+)\s*/gi, (_, p) => {
+    const t = (p || '').trim();
+    if (t && !t.startsWith('"') && !t.startsWith("'")) pathNeedles.push(t);
+    return ' ';
+  });
+
+  return {
+    pathNeedles,
+    freeText: rest.replace(/\s+/g, ' ').trim(),
+  };
+}
+
+function pathMatchesObsidianPathNeedles(fullPath, needles) {
+  if (!needles.length) return true;
+  const fp = normalizePathLabel(fullPath).toLowerCase();
+  for (const raw of needles) {
+    const n = normalizePathLabel(raw).toLowerCase().replace(/^\/+|\/+$/g, '');
+    if (!n) continue;
+    if (fp.includes(n)) continue;
+    const segments = n.split('/').filter(Boolean);
+    if (segments.length && segments.some((seg) => seg.length >= 2 && fp.includes(seg.toLowerCase())))
+      continue;
+    return false;
+  }
+  return true;
+}
+
+function obsidianFreeTextMatchesFullPath(fullPath, label, freeText) {
+  if (!freeText) return true;
+  const blob = `${normalizePathLabel(fullPath)} ${label || ''}`.toLowerCase();
+  const tokens = freeText.split(/\s+/).filter(Boolean);
+  for (const tok of tokens) {
+    const t = tok.toLowerCase();
+    if (!t || t.startsWith('-')) continue;
+    if (t.startsWith('tag:')) {
+      if (!blob.includes(t.slice(4))) return false;
+    } else if (!blob.includes(t)) return false;
+  }
+  return true;
+}
+
+function pathMatchesBookmarkPrefix(fullPath, prefix) {
+  if (!prefix || !String(prefix).trim()) return true;
+  const fp = normalizePathLabel(fullPath).toLowerCase();
+  const px = normalizePathLabel(prefix).toLowerCase().replace(/\/+$/g, '');
+  if (!px) return true;
+  return fp === px || fp.startsWith(px + '/');
+}
+
+/** Filtros graph.json + marcador (path prefix) — ignorável quando não há notas (fallback). */
+function applyObsidianGraphFilters(nodes, edges, raw, files, bookmarkPathPrefix, ignoreGraphSearch) {
+  const base = extractObsidianGraphSettings(raw || {});
+  const st = ignoreGraphSearch
+    ? { search: '', showOrphans: base.showOrphans }
+    : base;
+
+  const idToPath = new Map(
+    (files || []).map((f) => [
+      f.id,
+      normalizePathLabel(f._listLabel || f.name),
+    ])
+  );
+
+  const parsed = parseObsidianGraphQuery(st.search);
+
+  let outN = nodes.filter((n) => {
+    const path = idToPath.get(n.id) || '';
+    if (!pathMatchesBookmarkPrefix(path, bookmarkPathPrefix)) return false;
+    if (!pathMatchesObsidianPathNeedles(path, parsed.pathNeedles)) return false;
+    if (!obsidianFreeTextMatchesFullPath(path, n.label || '', parsed.freeText))
+      return false;
+    return true;
+  });
+
   let outE = edges.slice();
   const notes = [];
-
-  const q = st.search.toLowerCase();
-  if (q) {
-    outN = outN.filter((n) => {
-      const blob = `${n.label || ''} ${n.title || ''}`.toLowerCase();
-      return blob.includes(q);
-    });
-    const ok = new Set(outN.map((n) => n.id));
-    outE = outE.filter((e) => ok.has(e.from) && ok.has(e.to));
-    notes.push(`busca "${st.search}"`);
+  if (st.search && !ignoreGraphSearch) {
+    notes.push(`filtro "${st.search.slice(0, 52)}${st.search.length > 52 ? '…' : ''}"`);
   }
+  if (bookmarkPathPrefix)
+    notes.push(`marcador · ${normalizePathLabel(bookmarkPathPrefix)}`);
+
+  const okIds = new Set(outN.map((n) => n.id));
+  outE = outE.filter((e) => okIds.has(e.from) && okIds.has(e.to));
 
   if (st.showOrphans === false) {
     const connected = new Set();
@@ -1557,10 +1788,15 @@ async function refreshVaultGraphView() {
   destroyVaultGraphNetwork();
 
   try {
-    setGraphProgress('Carregando bookmarks e filtros (.obsidian)…');
-    await loadObsidianConfigsForVault();
+    if (!state.obsidianConfigsLoaded) {
+      setGraphProgress('Carregando bookmarks e filtros (.obsidian)…');
+    }
+    await ensureObsidianConfigsLoaded();
 
     const files = state.lastFileList || [];
+    const bookmarkPrefix =
+      (el.graphBookmarkSelect && el.graphBookmarkSelect.value) || '';
+
     const sig = computeVaultListSignature(files);
     let nodes;
     let edges;
@@ -1587,11 +1823,47 @@ async function refreshVaultGraphView() {
       };
     }
 
-    const filtered = applyObsidianGraphFilters(
+    let filtered = applyObsidianGraphFilters(
       nodes,
       edges,
-      state.obsidianGraphRaw
+      state.obsidianGraphRaw,
+      files,
+      bookmarkPrefix,
+      false
     );
+    let usedFallback = false;
+    let fallbackStage = 0;
+
+    if (filtered.nodes.length === 0 && files.length > 0) {
+      const relaxedBookmark = applyObsidianGraphFilters(
+        nodes,
+        edges,
+        state.obsidianGraphRaw,
+        files,
+        bookmarkPrefix,
+        true
+      );
+      if (relaxedBookmark.nodes.length > 0) {
+        filtered = relaxedBookmark;
+        usedFallback = true;
+        fallbackStage = 1;
+      } else {
+        const relaxedAll = applyObsidianGraphFilters(
+          nodes,
+          edges,
+          state.obsidianGraphRaw,
+          files,
+          '',
+          true
+        );
+        if (relaxedAll.nodes.length > 0) {
+          filtered = relaxedAll;
+          usedFallback = true;
+          fallbackStage = 2;
+        }
+      }
+    }
+
     nodes = filtered.nodes;
     edges = filtered.edges;
 
@@ -1603,12 +1875,20 @@ async function refreshVaultGraphView() {
         );
       } else {
         setHeaderGraphStatus(
-          'Nenhuma nota visível após os filtros do graph.json (busca ou órfãs). Ajuste no Obsidian ou altere graph.json.'
+          'Nenhuma nota visível após filtros. Experimente outro marcador ou reveja o graph.json no Obsidian.'
         );
       }
     } else {
       let line = `${nodes.length} notas · ${edges.length} ligações`;
       if (filtered.filterNote) line += ` · ${filtered.filterNote}`;
+      if (usedFallback && fallbackStage === 1) {
+        line +=
+          ' · pesquisa do graph.json excluía tudo — mapa sem esse texto (marcador mantido)';
+      }
+      if (usedFallback && fallbackStage === 2) {
+        line +=
+          ' · filtros/marcador excluíam tudo — mapa completo do vault';
+      }
       if (bm) line += ` · ${bm} favorito(s) (bookmarks.json)`;
       setHeaderGraphStatus(line);
     }
@@ -1901,7 +2181,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=25', window.location.href), {
+      .register(new URL('./sw.js?v=26', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -1945,6 +2225,7 @@ function logout() {
   state.obsidianGraphRaw = null;
   state.obsidianBookmarkPaths = new Set();
   invalidateVaultGraphLinkCache();
+  invalidateObsidianConfigCache();
   switchVaultTab('editor');
 }
 
@@ -1974,8 +2255,11 @@ function bindUi() {
   el.graphLoadingStatus = document.getElementById('graph-loading-status');
   el.headerGraphStatus = document.getElementById('header-graph-status');
   el.btnCloseNote = document.getElementById('btn-close-note');
+  el.btnDuplicateNote = document.getElementById('btn-duplicate-note');
+  el.btnDeleteNote = document.getElementById('btn-delete-note');
   el.noteTitleBlock = document.getElementById('note-title-block');
   el.noteTitleInput = document.getElementById('note-title-input');
+  el.graphBookmarkSelect = document.getElementById('graph-bookmark-select');
 
   initTheme();
   updateSidebarSectionTitle();
@@ -1988,6 +2272,18 @@ function bindUi() {
 
   if (el.btnCloseNote)
     el.btnCloseNote.addEventListener('click', () => closeCurrentNote());
+  if (el.btnDuplicateNote)
+    el.btnDuplicateNote.addEventListener('click', () =>
+      void duplicateCurrentNote()
+    );
+  if (el.btnDeleteNote)
+    el.btnDeleteNote.addEventListener('click', () => void deleteCurrentNote());
+
+  if (el.graphBookmarkSelect) {
+    el.graphBookmarkSelect.addEventListener('change', () => {
+      void refreshVaultGraphView();
+    });
+  }
 
   if (el.noteTitleInput) {
     el.noteTitleInput.addEventListener('input', () => {

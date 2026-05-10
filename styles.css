@@ -576,6 +576,87 @@ html.dark .file-tree .tree-file button.is-active {
   min-width: 0;
 }
 
+.editor-titlebar-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.btn-icon-toolbar {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.btn-icon-toolbar:hover {
+  color: var(--text);
+  border-color: var(--muted);
+  background: var(--bg);
+}
+
+.btn-icon-toolbar--danger:hover {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.45);
+  background: rgba(185, 28, 28, 0.06);
+}
+
+html.dark .btn-icon-toolbar--danger:hover {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.45);
+  background: rgba(252, 165, 165, 0.08);
+}
+
+.btn-icon-toolbar[hidden],
+.btn-icon-close[hidden] {
+  display: none !important;
+}
+
+.graph-context-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.graph-context-bar[hidden] {
+  display: none !important;
+}
+
+.graph-context-bar__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.graph-bookmark-select {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: min(100%, 420px);
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
 .note-title-block {
   flex-shrink: 0;
   padding: 1rem 1.25rem 0.75rem;
@@ -650,10 +731,6 @@ html.dark .file-tree .tree-file button.is-active {
   color: var(--text);
   border-color: var(--muted);
   background: var(--bg);
-}
-
-.btn-icon-close[hidden] {
-  display: none !important;
 }
 
 .editor-shell textarea#markdown-editor {
@@ -743,14 +820,6 @@ html.dark li.CodeMirror-hint-active {
 .editor-shell .EasyMDEContainer .editor-toolbar button.active {
   background: rgba(37, 99, 235, 0.12);
   border-color: transparent;
-}
-
-.editor-shell .EasyMDEContainer .editor-toolbar button.easymde-btn-duplicate {
-  margin-left: auto;
-}
-
-.editor-shell .EasyMDEContainer .editor-toolbar button.easymde-btn-duplicate[hidden] {
-  display: none !important;
 }
 
 html.dark .editor-shell .EasyMDEContainer .editor-toolbar button:hover,
