@@ -1,21 +1,29 @@
-/** Incrementar ao mudar lógica — verificar na consola F12 se o deploy está atual. */
-const APP_BUILD = '2026-05-10-v4';
+/** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
+const APP_BUILD = '2026-05-10-v5';
+
+const UI_EDITOR_EMPTY_TITLE =
+  'Editor — selecione um arquivo na lista ao lado';
 
 /**
  * Configuração
  * CLIENT_ID: credencial OAuth "Aplicação Web" (GCP).
- * BRAIN_FOLDER_ID: ID na URL do Drive (.../folders/ESTE_ID), ou omita e use ?folder=ID na página.
+ * BRAIN_FOLDER_ID: ID na URL do Drive (.../folders/ESTE_ID) ou use ?folder=ID na página.
  *
- * GCP: acrescentar em "URIs de redirecionamento autorizados" → https://muriloai.github.io
- * (mantém também http://localhost:PORT para desenvolvimento local).
+ * GCP: inclua em "URIs de redirecionamento autorizados" → https://muriloai.github.io
+ * (e http://localhost:PORTA para testes locais).
  */
 const CONFIG = {
   CLIENT_ID:
     '1096778565225-ucf7kcnrap9qnledd3cbugdoi5t3k1hc.apps.googleusercontent.com',
+  /**
+   * Pasta do vault Obsidian no Drive (não a pasta pai que a envolve).
+   * Pai: …/folders/1JjM7_QtmkLaQgMMEmfclobsMVZhGzX61
+   * Vault Obsidian (use este ID): …/folders/1vTkjJSKbVZ1Swn7jfoh3IrJuG3E8Shhz
+   */
   BRAIN_FOLDER_ID: '1vTkjJSKbVZ1Swn7jfoh3IrJuG3E8Shhz',
-  /** Se a pasta Brain estiver num Shared Drive (Equipa), ponha true. */
+  /** Se a pasta estiver em um drive compartilhado (Google Workspace), use true. */
   BRAIN_IN_SHARED_DRIVE: false,
-  /** Obsidian: .md estão em subpastas — lista todas recursivamente (recomendado). */
+  /** Obsidian: arquivos .md em subpastas — listar tudo de forma recursiva (recomendado). */
   LIST_MD_RECURSIVE: true,
 };
 
@@ -24,7 +32,7 @@ const SCOPES =
 
 const AUTOSAVE_MS = 2000;
 
-/** Depois da primeira listagem Drive bem-sucedida, próximos logins usam prompt silencioso. */
+/** Depois da primeira listagem no Drive ok, próximos logins podem ser mais silenciosos. */
 const LS_DRIVE_LIST_OK = 'brain-drive-drive-list-ok-v1';
 
 const state = {
@@ -36,7 +44,7 @@ const state = {
   tokenClient: null,
   easyMDE: null,
   loadingFile: false,
-  /** Após "Autorizar Drive": novo token deve só voltar a listar ficheiros. */
+  /** Depois de "Autorizar Google Drive": novo token e nova tentativa de listar. */
   wantRefreshAfterToken: false,
 };
 
@@ -52,7 +60,13 @@ const el = {
   btnTheme: null,
   saveStatus: null,
   btnReauthDrive: null,
+  editorFileTitle: null,
 };
+
+function setEditorFileTitle(label) {
+  if (!el.editorFileTitle) return;
+  el.editorFileTitle.textContent = label || UI_EDITOR_EMPTY_TITLE;
+}
 
 function hasOAuthClientConfigured() {
   const id = (CONFIG.CLIENT_ID || '').trim();
@@ -63,7 +77,7 @@ function hasOAuthClientConfigured() {
   );
 }
 
-/** ID da pasta no Drive (constante ou ?folder= / #folder= sem commit). */
+/** ID da pasta no Drive (constante em CONFIG ou ?folder= / #folder= na URL). */
 function getBrainFolderId() {
   let fromUrl =
     typeof window !== 'undefined'
@@ -128,10 +142,10 @@ function handleTokenResponse(resp) {
   }
 }
 
-/** Novo token após "Autorizar Drive" — voltar a pedir a lista (bootstrap já correu). */
+/** Novo token após autorizar o Drive — tentar listar de novo. */
 async function retryListAfterReauth() {
   try {
-    setSaveStatus('A atualizar permissões…');
+    setSaveStatus('Atualizando permissões…');
     await refreshFileList();
     setSaveStatus('');
     if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
@@ -160,7 +174,7 @@ async function bootstrapAfterAuth() {
     el.btnLogout.hidden = false;
   } catch (e) {
     console.error(e);
-    setSaveStatus('Erro ao carregar o perfil. Tente sair e entrar de novo.');
+    setSaveStatus('Erro ao carregar o perfil. Saia e entre de novo.');
     return;
   }
 
@@ -172,7 +186,7 @@ async function bootstrapAfterAuth() {
     console.error(e);
     const msg =
       e.message ||
-      'Não foi possível listar ficheiros no Drive. Veja a mensagem abaixo.';
+      'Não foi possível listar os arquivos no Google Drive. Veja a mensagem abaixo.';
     setSaveStatus(msg);
     if (el.fileListEmpty) {
       el.fileListEmpty.hidden = false;
@@ -197,7 +211,7 @@ function explainDriveListFailure(status, bodyText) {
       )
     ) {
       return (
-        'Ative a API "Google Drive API" na Google Cloud Console no mesmo projeto onde criou o Client ID ' +
+        'Ative a API "Google Drive API" no Google Cloud Console, no mesmo projeto do Client ID ' +
         '(APIs e serviços → Biblioteca → Google Drive API → Ativar).'
       );
     }
@@ -209,19 +223,19 @@ function explainDriveListFailure(status, bodyText) {
       )
     ) {
       return (
-        'Falta permissão para o Google Drive. Clique em "Autorizar Drive" ou remova o acesso desta app em ' +
-        'https://myaccount.google.com/permissions e volte a entrar para aceitar todos os pedidos.'
+        'Falta permissão para o Google Drive. Clique em "Autorizar Google Drive" ou remova o acesso a este app em ' +
+        'https://myaccount.google.com/permissions e entre de novo para aceitar todas as permissões.'
       );
     }
 
     if (status === 404 || reason === 'notFound') {
       return (
-        'Pasta não encontrada ou sem acesso. Confira o ID da pasta (BRAIN_FOLDER_ID ou ?folder= no URL).'
+        'Pasta não encontrada ou sem acesso. Confira o ID (BRAIN_FOLDER_ID ou ?folder= na URL).'
       );
     }
 
     if (status === 403 && /cannotDownload/i.test(msg)) {
-      return 'Sem permissão para ler esta pasta. Confirme que a conta tem acesso à pasta no Drive.';
+      return 'Sem permissão para ler esta pasta. Confirme se esta conta tem acesso no Drive.';
     }
 
     return msg || raw.slice(0, 240) || `Erro HTTP ${status}`;
@@ -231,7 +245,9 @@ function explainDriveListFailure(status, bodyText) {
 }
 
 function shouldShowReauthButton(message) {
-  return /Autorizar Drive|permissão|scope|Falta permissão/i.test(message);
+  return /Autorizar Google Drive|Autorizar Drive|permissão|scope|Falta permissão/i.test(
+    message
+  );
 }
 
 async function loadUserProfile() {
@@ -241,7 +257,7 @@ async function loadUserProfile() {
   if (!res.ok) {
     const t = await res.text();
     throw new Error(
-      `Perfil Google (${res.status}). Confirme scopes openid/profile e token válido. ${t.slice(0, 120)}`
+      `Perfil do Google (${res.status}). Confirme os escopos openid/perfil e um token válido. ${t.slice(0, 120)}`
     );
   }
   const data = await res.json();
@@ -264,7 +280,7 @@ async function driveFetch(url, options = {}) {
   return res;
 }
 
-/** Lista tudo o que está directamente dentro de uma pasta (ficheiros e subpastas), com paginação. */
+/** Lista tudo que está diretamente dentro de uma pasta (arquivos e subpastas), com paginação. */
 async function listAllItemsInFolder(pageParentId) {
   const q = `'${pageParentId}' in parents and trashed = false`;
   const out = [];
@@ -326,7 +342,7 @@ async function listMdRecursive(rootFolderId) {
   return mdFiles;
 }
 
-/** Só ficheiros .md no nível directo da pasta Brain (legado). */
+/** Somente .md no nível direto da pasta Brain (modo legado). */
 async function listMdShallowOnly(brainFolderId) {
   const items = await listAllItemsInFolder(brainFolderId);
   return items.filter(
@@ -348,7 +364,7 @@ function renderFileList(files) {
   if (!files.length) {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
-      'Nenhum .md na pasta Brain (incluindo subpastas). Confirme o ID da pasta no Drive ou se os ficheiros estão noutro sítio.';
+      'Nenhum .md nesta pasta do vault (incluindo subpastas). Confira o ID da pasta no Drive ou onde estão os arquivos.';
     return;
   }
 
@@ -380,18 +396,18 @@ async function refreshFileList() {
   if (!hasOAuthClientConfigured()) {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
-      'CLIENT_ID inválido em app.js.';
+      'CLIENT_ID inválido no app.js.';
     el.fileList.innerHTML = '';
     return;
   }
   if (!hasBrainFolderConfigured()) {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
-      'Defina BRAIN_FOLDER_ID em app.js ou abra com ?folder=ID_DA_PASTA (URL do Drive …/folders/ID).';
+      'Defina BRAIN_FOLDER_ID no app.js ou abra com ?folder=ID_DA_PASTA (URL do Drive …/folders/ID).';
     el.fileList.innerHTML = '';
     return;
   }
-  setSaveStatus('A carregar lista…');
+  setSaveStatus('Carregando lista…');
   const files = await listMdInBrainFolder();
   renderFileList(files);
   setSaveStatus('');
@@ -452,14 +468,14 @@ async function patchFileContents(fileId, fileName, content) {
 async function saveCurrentFile({ silent } = {}) {
   if (!state.currentFile || !state.easyMDE) return;
   const content = state.easyMDE.value();
-  if (!silent) setSaveStatus('A guardar…');
+  if (!silent) setSaveStatus('Salvando…');
   await patchFileContents(
     state.currentFile.id,
     state.currentFile.name,
     content
   );
   state.dirty = false;
-  if (!silent) setSaveStatus('Guardado');
+  if (!silent) setSaveStatus('Salvo');
 }
 
 function cancelAutosave() {
@@ -474,10 +490,10 @@ function scheduleAutosave() {
   state.autosaveTimer = setTimeout(() => {
     state.autosaveTimer = null;
     void saveCurrentFile({ silent: true }).then(() => {
-      setSaveStatus('Guardado (auto)');
+      setSaveStatus('Salvo automaticamente');
     }).catch((e) => {
       console.error(e);
-      setSaveStatus('Erro ao guardar');
+      setSaveStatus('Erro ao salvar');
     });
   }, AUTOSAVE_MS);
 }
@@ -485,7 +501,7 @@ function scheduleAutosave() {
 async function selectFile(file, liEl) {
   try {
     if (state.dirty && state.currentFile) {
-      setSaveStatus('A guardar…');
+      setSaveStatus('Salvando…');
       await saveCurrentFile({ silent: true });
     }
 
@@ -495,7 +511,8 @@ async function selectFile(file, liEl) {
     liEl.classList.add('is-active');
 
     state.currentFile = file;
-    setSaveStatus('A abrir…');
+    setEditorFileTitle(file._listLabel || file.name);
+    setSaveStatus('Abrindo…');
     const text = await getFileContent(file.id);
     state.loadingFile = true;
     state.easyMDE.value(text);
@@ -509,7 +526,7 @@ async function selectFile(file, liEl) {
     cancelAutosave();
   } catch (e) {
     console.error(e);
-    setSaveStatus('Erro ao abrir ficheiro');
+    setSaveStatus('Erro ao abrir o arquivo');
   }
 }
 
@@ -541,10 +558,10 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=4', window.location.href), {
+      .register(new URL('./sw.js?v=5', window.location.href), {
         scope: './',
       })
-      .catch((e) => console.warn('SW registar:', e));
+      .catch((e) => console.warn('Service Worker:', e));
   };
   if (document.readyState === 'complete') onReady();
   else window.addEventListener('load', onReady);
@@ -561,12 +578,13 @@ function logout() {
   el.fileList.innerHTML = '';
   el.fileListEmpty.hidden = false;
   el.fileListEmpty.textContent =
-    'Inicie sessão para ver os ficheiros.';
+    'Faça login para ver os arquivos.';
   el.btnLogin.hidden = false;
   el.btnLogout.hidden = true;
   if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
   el.btnSave.disabled = true;
   setSaveStatus('');
+  setEditorFileTitle(null);
   if (state.easyMDE) state.easyMDE.value('');
 }
 
@@ -580,6 +598,7 @@ function bindUi() {
   el.btnTheme = document.getElementById('btn-theme');
   el.saveStatus = document.getElementById('save-status');
   el.btnReauthDrive = document.getElementById('btn-reauth-drive');
+  el.editorFileTitle = document.getElementById('editor-file-title');
 
   initTheme();
 
@@ -596,7 +615,7 @@ function bindUi() {
   el.btnLogin.addEventListener('click', () => {
     if (!hasOAuthClientConfigured()) {
       window.alert(
-        'Defina um CLIENT_ID OAuth (Aplicação Web) válido em CONFIG em app.js.'
+        'Defina um CLIENT_ID OAuth (aplicativo Web) válido em CONFIG no app.js.'
       );
       return;
     }
@@ -612,22 +631,22 @@ function bindUi() {
     cancelAutosave();
     void saveCurrentFile({ silent: false }).catch((e) => {
       console.error(e);
-      setSaveStatus('Erro ao guardar');
+      setSaveStatus('Erro ao salvar');
     });
   });
 
   state.easyMDE = new EasyMDE({
     element: document.getElementById('markdown-editor'),
     spellChecker: false,
-    status: ['lines', 'words', 'cursor'],
-    placeholder: 'Selecione um ficheiro .md na lista…',
-    autoDownloadFontAwesome: false,
+    status: false,
+    placeholder: 'Selecione um arquivo .md na lista ao lado.',
+    autoDownloadFontAwesome: true,
   });
 
   state.easyMDE.codemirror.on('change', () => {
     if (state.loadingFile || !state.currentFile) return;
     state.dirty = true;
-    setSaveStatus('Alterações pendentes');
+    setSaveStatus('Alterações não salvas');
     scheduleAutosave();
   });
 

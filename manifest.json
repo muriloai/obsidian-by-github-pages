@@ -1,7 +1,7 @@
 {
   "name": "Obsidian Brain Drive",
   "short_name": "BrainDrive",
-  "description": "Editor Markdown ligado ao Google Drive",
+  "description": "Editor Markdown com vault Obsidian no Google Drive",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -227,6 +227,24 @@ html.dark .file-list li.is-active button {
   flex-direction: column;
 }
 
+.editor-titlebar {
+  flex-shrink: 0;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.editor-file-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editor-shell textarea#markdown-editor {
   width: 100%;
   min-height: 200px;
@@ -234,16 +252,16 @@ html.dark .file-list li.is-active button {
 }
 
 .editor-shell .EasyMDEContainer {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .editor-shell .EasyMDEContainer .CodeMirror {
   flex: 1;
   height: auto !important;
-  min-height: 320px;
+  min-height: 280px;
   border-radius: 0;
   background: var(--surface);
   color: var(--text);
@@ -254,14 +272,18 @@ html.dark .editor-shell .EasyMDEContainer .CodeMirror {
 }
 
 .editor-shell .EasyMDEContainer .CodeMirror-scroll {
-  min-height: 280px;
+  min-height: 240px;
 }
 
 .editor-shell .EasyMDEContainer .editor-toolbar {
-  border-radius: var(--editor-radius) var(--editor-radius) 0 0;
+  border-radius: 0;
   border: none;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+
+.editor-shell .EasyMDEContainer .editor-toolbar button i.fa {
+  font-style: normal;
 }
 
 .editor-shell .EasyMDEContainer .editor-toolbar i.separator {

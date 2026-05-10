@@ -1,20 +1,20 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#22283a" />
-    <meta name="description" content="Editor Markdown com ficheiros .md do Google Drive" />
+    <meta name="description" content="Editor Markdown com arquivos .md no Google Drive (vault Obsidian)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Brain Drive" />
-    <link rel="manifest" href="./manifest.json?v=4" />
+    <link rel="manifest" href="./manifest.json?v=5" />
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <link rel="icon" type="image/png" href="./icons/icon-192.png" />
     <title>Brain Drive</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.css" />
-    <link rel="stylesheet" href="./styles.css?v=4" />
+    <link rel="stylesheet" href="./styles.css?v=5" />
   </head>
   <body>
     <header class="app-header">
@@ -22,30 +22,35 @@
       <div class="header-actions">
         <span id="user-name" class="user-name" aria-live="polite"></span>
         <span id="save-status" class="save-status" aria-live="polite"></span>
-        <button type="button" id="btn-save" class="btn btn-primary" disabled>Guardar</button>
-        <button type="button" id="btn-theme" class="btn btn-ghost" title="Alternar tema">Tema</button>
+        <button type="button" id="btn-save" class="btn btn-primary" disabled>Salvar</button>
+        <button type="button" id="btn-theme" class="btn btn-ghost" title="Alternar tema claro/escuro">Tema</button>
         <button type="button" id="btn-logout" class="btn btn-ghost" hidden>Sair</button>
         <button type="button" id="btn-reauth-drive" class="btn btn-ghost" hidden>
-          Autorizar Drive
+          Autorizar Google Drive
         </button>
         <button type="button" id="btn-google-login" class="btn btn-google" disabled>Entrar com Google</button>
       </div>
     </header>
     <main class="app-main">
-      <aside class="sidebar" aria-label="Ficheiros Markdown">
+      <aside class="sidebar" aria-label="Arquivos Markdown">
         <div class="sidebar-head">Notas (.md)</div>
         <ul id="file-list" class="file-list"></ul>
-        <p id="file-list-empty" class="file-list-empty">Inicie sessão para ver os ficheiros.</p>
+        <p id="file-list-empty" class="file-list-empty">Faça login para ver os arquivos.</p>
       </aside>
-      <section class="editor-wrap" aria-label="Editor">
+      <section class="editor-wrap" aria-label="Editor Markdown">
         <div class="editor-shell">
-          <textarea id="markdown-editor" rows="12" aria-label="Conteúdo Markdown"></textarea>
+          <header class="editor-titlebar">
+            <h2 id="editor-file-title" class="editor-file-title">
+              Editor — selecione um arquivo na lista ao lado
+            </h2>
+          </header>
+          <textarea id="markdown-editor" rows="12" aria-label="Conteúdo em Markdown"></textarea>
         </div>
       </section>
     </main>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
     <!-- v=invalida cache agressivo do GitHub Pages / browser -->
-    <script src="./app.js?v=4" defer></script>
+    <script src="./app.js?v=5" defer></script>
   </body>
 </html>
