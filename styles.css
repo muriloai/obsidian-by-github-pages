@@ -6,7 +6,7 @@
   --border: #dde1ea;
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
-  --sidebar-w: 280px;
+  --sidebar-w: 320px;
   --header-h: 52px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
   --editor-radius: 8px;
@@ -84,10 +84,41 @@ body {
   white-space: nowrap;
 }
 
+.status-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 1.25rem;
+}
+
 .save-status {
   font-size: 0.75rem;
   color: var(--muted);
   min-width: 5rem;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin-loading 0.7s linear infinite;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+@keyframes spin-loading {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sidebar.sidebar--loading {
+  opacity: 0.65;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
 }
 
 .btn {
@@ -158,43 +189,157 @@ html.dark .btn-google {
   border-bottom: 1px solid var(--border);
 }
 
-.file-list {
-  list-style: none;
-  margin: 0;
-  padding: 0.5rem 0;
-  overflow-y: auto;
-  flex: 1;
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.file-list li button {
+.sidebar-search-wrap {
+  position: relative;
+  flex-shrink: 0;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-search-icon {
+  position: absolute;
+  left: 1.25rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.sidebar-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.65rem 0.45rem 2rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.sidebar-search::placeholder {
+  color: var(--muted);
+}
+
+.sidebar-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.tree-no-results {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.file-tree {
+  margin: 0;
+  padding: 0.35rem 0 0.5rem;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-tree .tree-root,
+.file-tree .tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.65rem;
+}
+
+.file-tree .tree-root {
+  padding-left: 0.35rem;
+}
+
+.file-tree .tree-folder {
+  margin: 0;
+}
+
+.file-tree .tree-folder > details {
+  margin: 0;
+}
+
+.file-tree .tree-folder > details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.35rem 0.25rem 0.35rem 0;
+  color: var(--text);
+  list-style-position: outside;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tree-folder-icon {
+  flex-shrink: 0;
+  opacity: 0.85;
+  font-size: 0.9em;
+}
+
+.file-tree .tree-folder > details > summary::-webkit-details-marker {
+  margin-right: 0.35rem;
+}
+
+.file-tree .tree-file {
+  margin: 0;
+}
+
+.file-tree .tree-file button {
   width: 100%;
   text-align: left;
   border: none;
   background: transparent;
-  padding: 0.5rem 1rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.25rem;
   font: inherit;
+  font-size: 0.8125rem;
   color: var(--text);
   cursor: pointer;
-  border-radius: 0;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
-.file-list li button:hover,
-.file-list li button:focus-visible {
+.tree-file-icon {
+  flex-shrink: 0;
+  opacity: 0.75;
+  font-size: 0.85em;
+  width: 1rem;
+}
+
+.file-tree .tree-file button:hover,
+.file-tree .tree-file button:focus-visible {
   background: rgba(37, 99, 235, 0.12);
 }
 
-.file-list li.is-active button {
-  background: rgba(37, 99, 235, 0.2);
-  font-weight: 500;
+.file-tree .tree-file button.is-active {
+  background: rgba(37, 99, 235, 0.22);
+  font-weight: 600;
 }
 
-html.dark .file-list li button:hover,
-html.dark .file-list li button:focus-visible {
+html.dark .file-tree .tree-file button:hover,
+html.dark .file-tree .tree-file button:focus-visible {
   background: rgba(59, 130, 246, 0.15);
 }
 
-html.dark .file-list li.is-active button {
-  background: rgba(59, 130, 246, 0.25);
+html.dark .file-tree .tree-file button.is-active {
+  background: rgba(59, 130, 246, 0.28);
 }
 
 .file-list-empty {
@@ -243,6 +388,20 @@ html.dark .file-list li.is-active button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.editor-toolbar-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+@media (max-width: 620px) {
+  .editor-toolbar-hint {
+    white-space: normal;
+  }
 }
 
 .editor-shell textarea#markdown-editor {

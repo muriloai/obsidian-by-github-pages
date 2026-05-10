@@ -1,5 +1,7 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v5';
+const APP_BUILD = '2026-05-10-v9';
+
+const TREE_SEARCH_DEBOUNCE_MS = 200;
 
 const UI_EDITOR_EMPTY_TITLE =
   'Editor — selecione um arquivo na lista ao lado';
@@ -46,13 +48,15 @@ const state = {
   loadingFile: false,
   /** Depois de "Autorizar Google Drive": novo token e nova tentativa de listar. */
   wantRefreshAfterToken: false,
+  /** Última lista completa do Drive (para busca sem novo request). */
+  lastFileList: [],
 };
 
 const tokenWaiters = [];
 
 const el = {
   userName: null,
-  fileList: null,
+  fileTree: null,
   fileListEmpty: null,
   btnLogin: null,
   btnLogout: null,
@@ -61,6 +65,9 @@ const el = {
   saveStatus: null,
   btnReauthDrive: null,
   editorFileTitle: null,
+  sidebar: null,
+  listLoadingSpinner: null,
+  treeSearch: null,
 };
 
 function setEditorFileTitle(label) {
@@ -97,8 +104,33 @@ function hasBrainFolderConfigured() {
   return Boolean(getBrainFolderId());
 }
 
+/** Windows / syncs às vezes usam "\"; o Drive no site usa "/". */
+function normalizePathLabel(label) {
+  return String(label || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .trim();
+}
+
 function setSaveStatus(text) {
   if (el.saveStatus) el.saveStatus.textContent = text || '';
+}
+
+function setListLoading(active) {
+  if (el.listLoadingSpinner) {
+    el.listLoadingSpinner.hidden = !active;
+    el.listLoadingSpinner.setAttribute('aria-busy', active ? 'true' : 'false');
+  }
+  if (el.sidebar) el.sidebar.classList.toggle('sidebar--loading', active);
+}
+
+function debounce(fn, ms) {
+  let t;
+  return function debounced(...args) {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
 }
 
 function whenGsiReady(cb) {
@@ -359,9 +391,120 @@ async function listMdInBrainFolder() {
   return listMdShallowOnly(folderId);
 }
 
-function renderFileList(files) {
-  el.fileList.innerHTML = '';
+/** Monta árvore de pastas a partir dos caminhos `_listLabel` (ex.: Pasta/nota.md). */
+function buildFolderTree(files) {
+  const root = { kind: 'folder', name: '', children: [] };
+
+  function getOrCreateFolder(parent, name) {
+    let f = parent.children.find(
+      (c) => c.kind === 'folder' && c.name === name
+    );
+    if (!f) {
+      f = { kind: 'folder', name, children: [] };
+      parent.children.push(f);
+    }
+    return f;
+  }
+
+  const sorted = files.slice().sort((a, b) => {
+    const la = normalizePathLabel(a._listLabel || a.name);
+    const lb = normalizePathLabel(b._listLabel || b.name);
+    return la.localeCompare(lb, 'pt-BR', { sensitivity: 'base' });
+  });
+
+  for (const file of sorted) {
+    const label = normalizePathLabel(file._listLabel || file.name);
+    const parts = label.split('/').filter(Boolean);
+    if (parts.length === 0) continue;
+
+    let parent = root;
+    for (let i = 0; i < parts.length; i++) {
+      const seg = parts[i];
+      if (i === parts.length - 1) {
+        parent.children.push({ kind: 'file', name: seg, file });
+      } else {
+        parent = getOrCreateFolder(parent, seg);
+      }
+    }
+  }
+
+  sortFolderTree(root);
+  return root;
+}
+
+function sortFolderTree(node) {
+  if (node.kind !== 'folder') return;
+  const folders = node.children.filter((c) => c.kind === 'folder');
+  const fileNodes = node.children.filter((c) => c.kind === 'file');
+  folders.sort((a, b) =>
+    a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' })
+  );
+  fileNodes.sort((a, b) =>
+    a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' })
+  );
+  node.children = [...folders, ...fileNodes];
+  folders.forEach(sortFolderTree);
+}
+
+/** Sem busca: primeiros níveis de pasta abertos. Com busca: tudo aberto para ver resultados. */
+const TREE_EXPAND_MAX_DEPTH = 4;
+
+function renderTreeNode(node, container, depth, expandAll) {
+  if (node.kind === 'file') {
+    const li = document.createElement('li');
+    li.className = 'tree-file';
+    li.setAttribute('role', 'none');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const ic = document.createElement('span');
+    ic.className = 'tree-file-icon fa fa-file-text-o';
+    ic.setAttribute('aria-hidden', 'true');
+    btn.appendChild(ic);
+    btn.appendChild(document.createTextNode(node.name));
+    if (state.currentFile?.id === node.file.id) btn.classList.add('is-active');
+    btn.addEventListener('click', () => void selectFile(node.file, btn));
+    li.appendChild(btn);
+    container.appendChild(li);
+    return;
+  }
+
+  const li = document.createElement('li');
+  li.className = 'tree-folder';
+  const details = document.createElement('details');
+  details.open =
+    expandAll || depth < TREE_EXPAND_MAX_DEPTH;
+  const summary = document.createElement('summary');
+  const fIcon = document.createElement('span');
+  fIcon.className = 'tree-folder-icon fa fa-folder-o';
+  fIcon.setAttribute('aria-hidden', 'true');
+  summary.appendChild(fIcon);
+  summary.appendChild(document.createTextNode(node.name));
+  details.appendChild(summary);
+  const ul = document.createElement('ul');
+  ul.className = 'tree-children';
+  ul.setAttribute('role', 'group');
+  node.children.forEach((child) =>
+    renderTreeNode(child, ul, depth + 1, expandAll)
+  );
+  details.appendChild(ul);
+  li.appendChild(details);
+  container.appendChild(li);
+}
+
+function renderFileTree(files, options = {}) {
+  const expandAll = Boolean(options.expandAll);
+  const isFiltered = Boolean(options.isFiltered);
+
+  el.fileTree.innerHTML = '';
   if (!files.length) {
+    if (isFiltered) {
+      el.fileListEmpty.hidden = true;
+      const p = document.createElement('p');
+      p.className = 'tree-no-results';
+      p.textContent = 'Nenhum arquivo corresponde à busca.';
+      el.fileTree.appendChild(p);
+      return;
+    }
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
       'Nenhum .md nesta pasta do vault (incluindo subpastas). Confira o ID da pasta no Drive ou onde estão os arquivos.';
@@ -369,27 +512,29 @@ function renderFileList(files) {
   }
 
   el.fileListEmpty.hidden = true;
-  const frag = document.createDocumentFragment();
+  const root = buildFolderTree(files);
+  const ul = document.createElement('ul');
+  ul.className = 'tree-root';
+  ul.setAttribute('role', 'group');
+  root.children.forEach((child) =>
+    renderTreeNode(child, ul, 0, expandAll)
+  );
+  el.fileTree.appendChild(ul);
+}
 
-  files
-    .slice()
-    .sort((a, b) => {
-      const la = a._listLabel || a.name;
-      const lb = b._listLabel || b.name;
-      return la.localeCompare(lb, undefined, { sensitivity: 'base' });
-    })
-    .forEach((file) => {
-      const li = document.createElement('li');
-      li.dataset.id = file.id;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = file._listLabel || file.name;
-      btn.addEventListener('click', () => void selectFile(file, li));
-      li.appendChild(btn);
-      frag.appendChild(li);
-    });
-
-  el.fileList.appendChild(frag);
+function applyTreeFilter() {
+  const q = (el.treeSearch?.value || '').trim();
+  const all = state.lastFileList || [];
+  if (!q) {
+    renderFileTree(all, { expandAll: false, isFiltered: false });
+    return;
+  }
+  const ql = q.toLowerCase();
+  const filtered = all.filter((f) => {
+    const label = normalizePathLabel(f._listLabel || f.name).toLowerCase();
+    return label.includes(ql);
+  });
+  renderFileTree(filtered, { expandAll: true, isFiltered: true });
 }
 
 async function refreshFileList() {
@@ -397,21 +542,31 @@ async function refreshFileList() {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
       'CLIENT_ID inválido no app.js.';
-    el.fileList.innerHTML = '';
+    el.fileTree.innerHTML = '';
     return;
   }
   if (!hasBrainFolderConfigured()) {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
       'Defina BRAIN_FOLDER_ID no app.js ou abra com ?folder=ID_DA_PASTA (URL do Drive …/folders/ID).';
-    el.fileList.innerHTML = '';
+    el.fileTree.innerHTML = '';
     return;
   }
+  setListLoading(true);
   setSaveStatus('Carregando lista…');
-  const files = await listMdInBrainFolder();
-  renderFileList(files);
-  setSaveStatus('');
-  localStorage.setItem(LS_DRIVE_LIST_OK, '1');
+  try {
+    const files = await listMdInBrainFolder();
+    state.lastFileList = files;
+    if ((el.treeSearch?.value || '').trim()) {
+      applyTreeFilter();
+    } else {
+      renderFileTree(files, { expandAll: false, isFiltered: false });
+    }
+    setSaveStatus('');
+    localStorage.setItem(LS_DRIVE_LIST_OK, '1');
+  } finally {
+    setListLoading(false);
+  }
 }
 
 async function getFileContent(fileId) {
@@ -498,17 +653,19 @@ function scheduleAutosave() {
   }, AUTOSAVE_MS);
 }
 
-async function selectFile(file, liEl) {
+async function selectFile(file, btnEl) {
   try {
     if (state.dirty && state.currentFile) {
       setSaveStatus('Salvando…');
       await saveCurrentFile({ silent: true });
     }
 
-    [...el.fileList.querySelectorAll('li')].forEach((li) =>
-      li.classList.remove('is-active')
-    );
-    liEl.classList.add('is-active');
+    if (el.fileTree) {
+      el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
+        b.classList.remove('is-active')
+      );
+      if (btnEl) btnEl.classList.add('is-active');
+    }
 
     state.currentFile = file;
     setEditorFileTitle(file._listLabel || file.name);
@@ -558,7 +715,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=5', window.location.href), {
+      .register(new URL('./sw.js?v=9', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -574,8 +731,10 @@ function logout() {
   state.dirty = false;
   state.wantRefreshAfterToken = false;
   state.didInitialLoadAfterAuth = false;
+  state.lastFileList = [];
   el.userName.textContent = '';
-  el.fileList.innerHTML = '';
+  if (el.treeSearch) el.treeSearch.value = '';
+  el.fileTree.innerHTML = '';
   el.fileListEmpty.hidden = false;
   el.fileListEmpty.textContent =
     'Faça login para ver os arquivos.';
@@ -584,13 +743,14 @@ function logout() {
   if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
   el.btnSave.disabled = true;
   setSaveStatus('');
+  setListLoading(false);
   setEditorFileTitle(null);
   if (state.easyMDE) state.easyMDE.value('');
 }
 
 function bindUi() {
   el.userName = document.getElementById('user-name');
-  el.fileList = document.getElementById('file-list');
+  el.fileTree = document.getElementById('file-tree');
   el.fileListEmpty = document.getElementById('file-list-empty');
   el.btnLogin = document.getElementById('btn-google-login');
   el.btnLogout = document.getElementById('btn-logout');
@@ -599,10 +759,19 @@ function bindUi() {
   el.saveStatus = document.getElementById('save-status');
   el.btnReauthDrive = document.getElementById('btn-reauth-drive');
   el.editorFileTitle = document.getElementById('editor-file-title');
+  el.sidebar = document.getElementById('sidebar');
+  el.listLoadingSpinner = document.getElementById('list-loading-spinner');
+  el.treeSearch = document.getElementById('tree-search');
 
   initTheme();
 
   el.btnTheme.addEventListener('click', toggleTheme);
+
+  if (el.treeSearch) {
+    const runSearch = debounce(() => applyTreeFilter(), TREE_SEARCH_DEBOUNCE_MS);
+    el.treeSearch.addEventListener('input', runSearch);
+    el.treeSearch.addEventListener('search', () => applyTreeFilter());
+  }
 
   if (el.btnReauthDrive) {
     el.btnReauthDrive.addEventListener('click', () => {
@@ -640,7 +809,8 @@ function bindUi() {
     spellChecker: false,
     status: false,
     placeholder: 'Selecione um arquivo .md na lista ao lado.',
-    autoDownloadFontAwesome: true,
+    /* Font Awesome 4 já é carregado no index.html (CDN); evita duplicar ou falhar no auto-download */
+    autoDownloadFontAwesome: false,
   });
 
   state.easyMDE.codemirror.on('change', () => {
