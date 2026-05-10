@@ -9,7 +9,7 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Brain Drive" />
-    <link rel="manifest" href="./manifest.json?v=9" />
+    <link rel="manifest" href="./manifest.json?v=11" />
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <link rel="icon" type="image/png" href="./icons/icon-192.png" />
     <title>Brain Drive</title>
@@ -20,22 +20,36 @@
       crossorigin="anonymous"
     />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.css" />
-    <link rel="stylesheet" href="./styles.css?v=9" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.css"
+    />
+    <link rel="stylesheet" href="./styles.css?v=11" />
   </head>
   <body>
     <header class="app-header">
       <div class="brand">Brain Drive</div>
       <div class="header-actions">
-        <span id="user-name" class="user-name" aria-live="polite"></span>
-        <span class="status-cluster" aria-live="polite">
+        <div class="header-meta" aria-live="polite">
+          <span id="user-name" class="user-name"></span>
           <span
             id="list-loading-spinner"
-            class="loading-spinner"
+            class="loading-spinner loading-spinner--inline"
             hidden
             aria-hidden="true"
           ></span>
           <span id="save-status" class="save-status"></span>
-        </span>
+        </div>
+        <button
+          type="button"
+          id="btn-reload-file"
+          class="btn btn-ghost btn-with-icon"
+          disabled
+          title="Recarregar do Google Drive — substitui o texto pela última versão no Drive (alterações não salvas neste editor serão perdidas)"
+        >
+          <span class="fa fa-refresh" aria-hidden="true"></span>
+          <span>Recarregar</span>
+        </button>
         <button type="button" id="btn-save" class="btn btn-primary" disabled>Salvar</button>
         <button type="button" id="btn-theme" class="btn btn-ghost" title="Alternar tema claro/escuro">Tema</button>
         <button type="button" id="btn-logout" class="btn btn-ghost" hidden>Sair</button>
@@ -69,10 +83,6 @@
             <h2 id="editor-file-title" class="editor-file-title">
               Editor — selecione um arquivo na lista ao lado
             </h2>
-            <p class="editor-toolbar-hint">
-              Abaixo do título do arquivo: barra de formatação Markdown (negrito, itálico, títulos,
-              listas, link, pré-visualização). Passe o mouse em cada botão para ver a dica.
-            </p>
           </header>
           <textarea id="markdown-editor" rows="12" aria-label="Conteúdo em Markdown"></textarea>
         </div>
@@ -80,7 +90,8 @@
     </main>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.js"></script>
     <!-- v=invalida cache agressivo do GitHub Pages / browser -->
-    <script src="./app.js?v=9" defer></script>
+    <script src="./app.js?v=11" defer></script>
   </body>
 </html>

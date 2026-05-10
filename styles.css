@@ -75,26 +75,30 @@ body {
   max-width: 100%;
 }
 
+.header-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-height: 1.35rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+
 .user-name {
   font-size: 0.875rem;
   color: var(--muted);
-  max-width: 200px;
+  max-width: min(220px, 38vw);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.status-cluster {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  min-height: 1.25rem;
-}
-
 .save-status {
   font-size: 0.75rem;
   color: var(--muted);
-  min-width: 5rem;
+  min-width: 0;
 }
 
 .loading-spinner {
@@ -107,6 +111,11 @@ body {
   animation: spin-loading 0.7s linear infinite;
   flex-shrink: 0;
   vertical-align: middle;
+}
+
+.loading-spinner--inline {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 @keyframes spin-loading {
@@ -134,6 +143,16 @@ body {
 .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.btn-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.btn-with-icon .fa {
+  font-size: 0.95em;
 }
 
 .btn-primary {
@@ -390,20 +409,6 @@ html.dark .file-tree .tree-file button.is-active {
   white-space: nowrap;
 }
 
-.editor-toolbar-hint {
-  margin: 0.35rem 0 0;
-  font-size: 0.72rem;
-  font-weight: 400;
-  line-height: 1.4;
-  color: var(--muted);
-}
-
-@media (max-width: 620px) {
-  .editor-toolbar-hint {
-    white-space: normal;
-  }
-}
-
 .editor-shell textarea#markdown-editor {
   width: 100%;
   min-height: 200px;
@@ -428,6 +433,40 @@ html.dark .file-tree .tree-file button.is-active {
 
 html.dark .editor-shell .EasyMDEContainer .CodeMirror {
   background: var(--surface);
+}
+
+/* Cursor e seleção visíveis no tema escuro */
+html.dark .EasyMDEContainer .CodeMirror-cursor {
+  border-left: 2px solid #e6edf3 !important;
+}
+
+html.dark .EasyMDEContainer .CodeMirror-selected {
+  background: rgba(59, 130, 246, 0.35) !important;
+}
+
+html.dark .EasyMDEContainer .CodeMirror-focused .CodeMirror-selected {
+  background: rgba(59, 130, 246, 0.42) !important;
+}
+
+html.dark .EasyMDEContainer .CodeMirror-line::selection,
+html.dark .EasyMDEContainer .CodeMirror-line > span::selection {
+  background: rgba(59, 130, 246, 0.45);
+}
+
+/* Lista de sugestões [[ (addon show-hint) */
+html.dark .CodeMirror-hints {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+html.dark .CodeMirror-hint {
+  color: var(--text) !important;
+}
+
+html.dark li.CodeMirror-hint-active {
+  background: rgba(59, 130, 246, 0.35) !important;
+  color: var(--text) !important;
 }
 
 .editor-shell .EasyMDEContainer .CodeMirror-scroll {

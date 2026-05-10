@@ -1,7 +1,9 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v9';
+const APP_BUILD = '2026-05-10-v11';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
+/** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ */
+const WIKI_LINK_MIN_CHARS = 2;
 
 const UI_EDITOR_EMPTY_TITLE =
   'Editor — selecione um arquivo na lista ao lado';
@@ -32,8 +34,6 @@ const CONFIG = {
 const SCOPES =
   'openid email profile https://www.googleapis.com/auth/drive';
 
-const AUTOSAVE_MS = 2000;
-
 /** Depois da primeira listagem no Drive ok, próximos logins podem ser mais silenciosos. */
 const LS_DRIVE_LIST_OK = 'brain-drive-drive-list-ok-v1';
 
@@ -42,7 +42,6 @@ const state = {
   currentFile: null,
   dirty: false,
   didInitialLoadAfterAuth: false,
-  autosaveTimer: null,
   tokenClient: null,
   easyMDE: null,
   loadingFile: false,
@@ -51,6 +50,16 @@ const state = {
   /** Última lista completa do Drive (para busca sem novo request). */
   lastFileList: [],
 };
+
+const MSG_RELOAD_FROM_DRIVE =
+  'Recarregar substitui o texto pela última versão salva no Google Drive.\n\n' +
+  'As alterações feitas neste editor e ainda não salvas com o botão Salvar serão perdidas.\n\n' +
+  'Continuar?';
+
+const MSG_SWITCH_NOTE_UNSAVED =
+  'Esta nota tem alterações não salvas.\n\n' +
+  'Ao abrir outra nota, essas alterações serão descartadas (use Salvar antes se precisar enviar ao Drive).\n\n' +
+  'Continuar?';
 
 const tokenWaiters = [];
 
@@ -61,6 +70,7 @@ const el = {
   btnLogin: null,
   btnLogout: null,
   btnSave: null,
+  btnReloadFile: null,
   btnTheme: null,
   saveStatus: null,
   btnReauthDrive: null,
@@ -131,6 +141,88 @@ function debounce(fn, ms) {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   };
+}
+
+/** Nomes de notas (.md) para sugestão em [[ … — usa lista já carregada do Drive. */
+function buildWikiSuggestions(query) {
+  const ql = query.trim().toLowerCase();
+  if (ql.length < WIKI_LINK_MIN_CHARS) return [];
+
+  const raw = [];
+  for (const f of state.lastFileList || []) {
+    const label = normalizePathLabel(f._listLabel || f.name);
+    const stem = (label.split('/').pop() || '')
+      .replace(/\.md$/i, '')
+      .trim();
+    if (!stem) continue;
+    const blob = `${stem} ${label}`.toLowerCase();
+    if (!blob.includes(ql)) continue;
+    raw.push({ stem, label });
+  }
+
+  raw.sort((a, b) =>
+    a.label.localeCompare(b.label, 'pt-BR', { sensitivity: 'base' })
+  );
+
+  const stemCount = new Map();
+  for (const r of raw) {
+    const k = r.stem.toLowerCase();
+    stemCount.set(k, (stemCount.get(k) || 0) + 1);
+  }
+
+  return raw.slice(0, 45).map((r) => {
+    const dup = (stemCount.get(r.stem.toLowerCase()) || 0) > 1;
+    const needsPath = dup || r.label.includes('/');
+    return {
+      text: r.stem,
+      displayText: needsPath ? `${r.stem} — ${r.label}` : r.stem,
+    };
+  });
+}
+
+function wikiLinkHint(cm) {
+  const CM = typeof CodeMirror !== 'undefined' ? CodeMirror : cm.constructor;
+  const Pass = CM.Pass;
+  const Pos = CM.Pos;
+
+  const cur = cm.getCursor();
+  const line = cm.getLine(cur.line);
+  const before = line.slice(0, cur.ch);
+  const match = before.match(/\[\[([^\[\]]*)$/);
+  if (!match) return Pass;
+  const q = match[1];
+  if (q.length < WIKI_LINK_MIN_CHARS) return Pass;
+
+  const items = buildWikiSuggestions(q);
+  if (!items.length) return Pass;
+
+  const innerStart = before.lastIndexOf('[[') + 2;
+
+  return {
+    from: Pos(cur.line, innerStart),
+    to: cur,
+    list: items.map((it) => ({
+      text: it.text,
+      displayText: it.displayText,
+    })),
+  };
+}
+
+function attachWikiLinkAutocomplete(cm) {
+  const CM = typeof CodeMirror !== 'undefined' ? CodeMirror : cm.constructor;
+  if (!CM || typeof CM.showHint !== 'function') return;
+
+  const triggerWiki = debounce(() => {
+    const cur = cm.getCursor();
+    const line = cm.getLine(cur.line);
+    const before = line.slice(0, cur.ch);
+    if (!/\[\[([^\[\]]*)$/.test(before)) return;
+    const m = before.match(/\[\[([^\[\]]*)$/);
+    if (!m || m[1].length < WIKI_LINK_MIN_CHARS) return;
+    CM.showHint(cm, wikiLinkHint, { completeSingle: false });
+  }, 90);
+
+  cm.on('inputRead', triggerWiki);
 }
 
 function whenGsiReady(cb) {
@@ -620,44 +712,50 @@ async function patchFileContents(fileId, fileName, content) {
   return res.json().catch(() => ({}));
 }
 
-async function saveCurrentFile({ silent } = {}) {
+async function saveCurrentFile() {
   if (!state.currentFile || !state.easyMDE) return;
   const content = state.easyMDE.value();
-  if (!silent) setSaveStatus('Salvando…');
+  setSaveStatus('Salvando…');
   await patchFileContents(
     state.currentFile.id,
     state.currentFile.name,
     content
   );
   state.dirty = false;
-  if (!silent) setSaveStatus('Salvo');
+  setSaveStatus('Salvo');
 }
 
-function cancelAutosave() {
-  if (state.autosaveTimer) {
-    clearTimeout(state.autosaveTimer);
-    state.autosaveTimer = null;
+async function reloadCurrentFileFromDrive() {
+  if (!state.currentFile || !state.easyMDE) return;
+  if (state.dirty) {
+    const ok = window.confirm(MSG_RELOAD_FROM_DRIVE);
+    if (!ok) return;
   }
-}
-
-function scheduleAutosave() {
-  cancelAutosave();
-  state.autosaveTimer = setTimeout(() => {
-    state.autosaveTimer = null;
-    void saveCurrentFile({ silent: true }).then(() => {
-      setSaveStatus('Salvo automaticamente');
-    }).catch((e) => {
-      console.error(e);
-      setSaveStatus('Erro ao salvar');
+  setSaveStatus('Recarregando…');
+  try {
+    const text = await getFileContent(state.currentFile.id);
+    state.loadingFile = true;
+    state.easyMDE.value(text);
+    queueMicrotask(() => {
+      state.loadingFile = false;
+      state.dirty = false;
     });
-  }, AUTOSAVE_MS);
+    setSaveStatus('Recarregado do Drive');
+  } catch (e) {
+    console.error(e);
+    setSaveStatus('Erro ao recarregar');
+  }
 }
 
 async function selectFile(file, btnEl) {
   try {
-    if (state.dirty && state.currentFile) {
-      setSaveStatus('Salvando…');
-      await saveCurrentFile({ silent: true });
+    if (
+      state.dirty &&
+      state.currentFile &&
+      state.currentFile.id !== file.id
+    ) {
+      const ok = window.confirm(MSG_SWITCH_NOTE_UNSAVED);
+      if (!ok) return;
     }
 
     if (el.fileTree) {
@@ -678,9 +776,8 @@ async function selectFile(file, btnEl) {
       state.dirty = false;
     });
     el.btnSave.disabled = false;
+    if (el.btnReloadFile) el.btnReloadFile.disabled = false;
     setSaveStatus('');
-
-    cancelAutosave();
   } catch (e) {
     console.error(e);
     setSaveStatus('Erro ao abrir o arquivo');
@@ -715,7 +812,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=9', window.location.href), {
+      .register(new URL('./sw.js?v=11', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -725,7 +822,6 @@ function registerServiceWorker() {
 }
 
 function logout() {
-  cancelAutosave();
   state.accessToken = null;
   state.currentFile = null;
   state.dirty = false;
@@ -742,6 +838,7 @@ function logout() {
   el.btnLogout.hidden = true;
   if (el.btnReauthDrive) el.btnReauthDrive.hidden = true;
   el.btnSave.disabled = true;
+  if (el.btnReloadFile) el.btnReloadFile.disabled = true;
   setSaveStatus('');
   setListLoading(false);
   setEditorFileTitle(null);
@@ -755,6 +852,7 @@ function bindUi() {
   el.btnLogin = document.getElementById('btn-google-login');
   el.btnLogout = document.getElementById('btn-logout');
   el.btnSave = document.getElementById('btn-save');
+  el.btnReloadFile = document.getElementById('btn-reload-file');
   el.btnTheme = document.getElementById('btn-theme');
   el.saveStatus = document.getElementById('save-status');
   el.btnReauthDrive = document.getElementById('btn-reauth-drive');
@@ -797,12 +895,17 @@ function bindUi() {
   el.btnLogout.addEventListener('click', logout);
 
   el.btnSave.addEventListener('click', () => {
-    cancelAutosave();
-    void saveCurrentFile({ silent: false }).catch((e) => {
+    void saveCurrentFile().catch((e) => {
       console.error(e);
       setSaveStatus('Erro ao salvar');
     });
   });
+
+  if (el.btnReloadFile) {
+    el.btnReloadFile.addEventListener('click', () => {
+      void reloadCurrentFileFromDrive();
+    });
+  }
 
   state.easyMDE = new EasyMDE({
     element: document.getElementById('markdown-editor'),
@@ -817,8 +920,9 @@ function bindUi() {
     if (state.loadingFile || !state.currentFile) return;
     state.dirty = true;
     setSaveStatus('Alterações não salvas');
-    scheduleAutosave();
   });
+
+  attachWikiLinkAutocomplete(state.easyMDE.codemirror);
 
   registerServiceWorker();
 }
