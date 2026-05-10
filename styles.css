@@ -528,6 +528,72 @@ html.dark .editor-shell .EasyMDEContainer .editor-toolbar button.active {
   background: rgba(59, 130, 246, 0.2);
 }
 
+/* Pré-visualização Markdown — EasyMDE usa fundo fixo claro (#f8f9fa); alinhar ao tema escuro */
+.editor-shell .EasyMDEContainer .editor-preview {
+  background: var(--surface);
+  color: var(--text);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview,
+html.dark .editor-shell .EasyMDEContainer .editor-preview-side,
+html.dark .editor-shell .EasyMDEContainer.editor-preview-active-side .editor-preview {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview h1,
+html.dark .editor-shell .EasyMDEContainer .editor-preview h2,
+html.dark .editor-shell .EasyMDEContainer .editor-preview h3,
+html.dark .editor-shell .EasyMDEContainer .editor-preview h4,
+html.dark .editor-shell .EasyMDEContainer .editor-preview h5,
+html.dark .editor-shell .EasyMDEContainer .editor-preview h6,
+html.dark .editor-shell .EasyMDEContainer .editor-preview p,
+html.dark .editor-shell .EasyMDEContainer .editor-preview li {
+  color: var(--text);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview a {
+  color: var(--accent);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview a:hover {
+  color: var(--accent-hover);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview code {
+  background: var(--bg);
+  color: #e6edf3;
+  border: 1px solid var(--border);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview pre code {
+  border: none;
+  color: var(--text);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview blockquote {
+  border-left-color: var(--accent);
+  color: var(--muted);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview hr {
+  border-color: var(--border);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview table th,
+html.dark .editor-shell .EasyMDEContainer .editor-preview table td {
+  border-color: var(--border);
+}
+
+html.dark .editor-shell .EasyMDEContainer .editor-preview table tr:nth-child(2n) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
 @media (max-width: 620px) {
   .header-actions {
     flex-basis: 100%;

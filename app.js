@@ -1,9 +1,9 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v14';
+const APP_BUILD = '2026-05-10-v15';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
-/** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ */
-const WIKI_LINK_MIN_CHARS = 2;
+/** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
+const WIKI_LINK_MIN_CHARS = 1;
 
 const UI_EDITOR_EMPTY_TITLE =
   'Editor | selecione um arquivo na lista ao lado';
@@ -452,17 +452,20 @@ function attachWikiLinkAutocomplete(cm) {
   const CM = typeof CodeMirror !== 'undefined' ? CodeMirror : cm.constructor;
   if (!CM || typeof CM.showHint !== 'function') return;
 
+  /** inputRead quase só IME; digitação normal usa change — sem change o [[ não abria sugestões. */
   const triggerWiki = debounce(() => {
     const cur = cm.getCursor();
-    const line = cm.getLine(cur.line);
+    const line = cm.getLine(cur.line) || '';
     const before = line.slice(0, cur.ch);
     if (!/\[\[([^\[\]]*)$/.test(before)) return;
     const m = before.match(/\[\[([^\[\]]*)$/);
     if (!m) return;
     if (wikiLinkQuerySegment(m[1]).length < WIKI_LINK_MIN_CHARS) return;
-    CM.showHint(cm, wikiLinkHint, { completeSingle: false });
-  }, 90);
+    CM.showHint(cm, wikiLinkHint, { completeSingle: false, closeOnUnfocus: true });
+  }, 45);
 
+  cm.on('change', triggerWiki);
+  cm.on('cursorActivity', triggerWiki);
   cm.on('inputRead', triggerWiki);
 }
 
@@ -1070,7 +1073,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=14', window.location.href), {
+      .register(new URL('./sw.js?v=15', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
