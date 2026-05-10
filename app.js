@@ -1,10 +1,14 @@
 /**
- * Configuração — substitua antes de usar.
- * CLIENT_ID: consola GCP (OAuth cliente Web).
- * BRAIN_FOLDER_ID: ID da pasta no URL do Drive (.../folders/ESTE_ID).
+ * Configuração
+ * CLIENT_ID: credencial OAuth "Aplicação Web" (GCP).
+ * BRAIN_FOLDER_ID: ID na URL do Drive (.../folders/ESTE_ID), ou omita e use ?folder=ID na página.
+ *
+ * GCP: acrescentar em "URIs de redirecionamento autorizados" → https://muriloai.github.io
+ * (mantém também http://localhost:PORT para desenvolvimento local).
  */
 const CONFIG = {
-  CLIENT_ID: 'SEU_CLIENT_ID.apps.googleusercontent.com',
+  CLIENT_ID:
+    '1096778565225-ucf7kcnrap9qnledd3cbugdoi5t3k1hc.apps.googleusercontent.com',
   BRAIN_FOLDER_ID: 'SEU_FOLDER_ID',
 };
 
@@ -37,13 +41,33 @@ const el = {
   saveStatus: null,
 };
 
-function isConfigValid() {
+function hasOAuthClientConfigured() {
+  const id = (CONFIG.CLIENT_ID || '').trim();
   return (
-    CONFIG.CLIENT_ID &&
-    !CONFIG.CLIENT_ID.startsWith('SEU_CLIENT_ID') &&
-    CONFIG.BRAIN_FOLDER_ID &&
-    CONFIG.BRAIN_FOLDER_ID !== 'SEU_FOLDER_ID'
+    Boolean(id) &&
+    !/^SEU_CLIENT_ID\b/i.test(id) &&
+    id.endsWith('.apps.googleusercontent.com')
   );
+}
+
+/** ID da pasta no Drive (constante ou ?folder= / #folder= sem commit). */
+function getBrainFolderId() {
+  let fromUrl =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('folder')
+      : null;
+  if (!fromUrl && typeof window !== 'undefined' && window.location.hash.length > 1) {
+    fromUrl = new URLSearchParams(
+      window.location.hash.replace(/^#\??/, '')
+    ).get('folder');
+  }
+  const raw = ((fromUrl && fromUrl.trim()) || CONFIG.BRAIN_FOLDER_ID || '').trim();
+  if (!raw || raw === 'SEU_FOLDER_ID') return '';
+  return raw;
+}
+
+function hasBrainFolderConfigured() {
+  return Boolean(getBrainFolderId());
 }
 
 function setSaveStatus(text) {
@@ -132,7 +156,8 @@ async function driveFetch(url, options = {}) {
 }
 
 async function listMdInBrainFolder() {
-  const folderId = CONFIG.BRAIN_FOLDER_ID;
+  const folderId = getBrainFolderId();
+  if (!folderId) return [];
   const q = `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`;
   const out = [];
   let pageToken;
@@ -190,10 +215,17 @@ function renderFileList(files) {
 }
 
 async function refreshFileList() {
-  if (!isConfigValid()) {
+  if (!hasOAuthClientConfigured()) {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
-      'Configure BRAIN_FOLDER_ID e CLIENT_ID em app.js.';
+      'CLIENT_ID inválido em app.js.';
+    el.fileList.innerHTML = '';
+    return;
+  }
+  if (!hasBrainFolderConfigured()) {
+    el.fileListEmpty.hidden = false;
+    el.fileListEmpty.textContent =
+      'Defina BRAIN_FOLDER_ID em app.js ou abra com ?folder=ID_DA_PASTA (URL do Drive …/folders/ID).';
     el.fileList.innerHTML = '';
     return;
   }
@@ -386,14 +418,10 @@ function bindUi() {
   el.btnTheme.addEventListener('click', toggleTheme);
 
   el.btnLogin.addEventListener('click', () => {
-    if (!isConfigValid()) {
+    if (!hasOAuthClientConfigured()) {
       window.alert(
-        'Edite CONFIG em app.js: CLIENT_ID (OAuth Web) e BRAIN_FOLDER_ID (pasta Brain).'
+        'Defina um CLIENT_ID OAuth (Aplicação Web) válido em CONFIG em app.js.'
       );
-      return;
-    }
-    if (!CONFIG.CLIENT_ID || CONFIG.CLIENT_ID.includes('SEU_CLIENT_ID')) {
-      window.alert('Defina um CLIENT_ID válido em app.js.');
       return;
     }
     state.tokenClient.requestAccessToken({ prompt: '' });
