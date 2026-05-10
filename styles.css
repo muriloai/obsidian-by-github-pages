@@ -101,6 +101,12 @@ body {
   min-width: 0;
 }
 
+/* Garantir que [hidden] não seja sobreposto por display do spinner */
+.loading-spinner[hidden],
+#list-loading-spinner[hidden] {
+  display: none !important;
+}
+
 .loading-spinner {
   display: inline-block;
   width: 1rem;

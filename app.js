@@ -1,12 +1,12 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v11';
+const APP_BUILD = '2026-05-10-v12';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ */
 const WIKI_LINK_MIN_CHARS = 2;
 
 const UI_EDITOR_EMPTY_TITLE =
-  'Editor — selecione um arquivo na lista ao lado';
+  'Editor | selecione um arquivo na lista ao lado';
 
 /**
  * Configuração
@@ -62,6 +62,37 @@ const MSG_SWITCH_NOTE_UNSAVED =
   'Continuar?';
 
 const tokenWaiters = [];
+
+/** GIS pode não chamar o callback (popup fechado, rede) — evita lista/spinner presos. */
+const TOKEN_REQUEST_TIMEOUT_MS = 75000;
+
+/** Listagem recursiva sem resposta (rede/API) — não deixa o spinner eterno. */
+const LIST_MD_TIMEOUT_MS = 120000;
+
+let tokenRequestTimer = null;
+
+function clearTokenRequestTimer() {
+  if (tokenRequestTimer != null) {
+    clearTimeout(tokenRequestTimer);
+    tokenRequestTimer = null;
+  }
+}
+
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
 
 const el = {
   userName: null,
@@ -247,6 +278,7 @@ function initTokenClient() {
 }
 
 function handleTokenResponse(resp) {
+  clearTokenRequestTimer();
   if (resp.error) {
     console.error('Erro GIS:', resp);
     state.wantRefreshAfterToken = false;
@@ -286,7 +318,16 @@ async function retryListAfterReauth() {
 
 function requestAccessToken() {
   return new Promise((resolve, reject) => {
+    clearTokenRequestTimer();
     tokenWaiters.push({ resolve, reject });
+    tokenRequestTimer = setTimeout(() => {
+      tokenRequestTimer = null;
+      const pending = tokenWaiters.splice(0);
+      const err = new Error(
+        'Tempo esgotado ao obter autorização Google. Use Entrar com Google de novo.'
+      );
+      pending.forEach((w) => w.reject(err));
+    }, TOKEN_REQUEST_TIMEOUT_MS);
     state.tokenClient.requestAccessToken({ prompt: '' });
   });
 }
@@ -647,7 +688,11 @@ async function refreshFileList() {
   setListLoading(true);
   setSaveStatus('Carregando lista…');
   try {
-    const files = await listMdInBrainFolder();
+    const files = await withTimeout(
+      listMdInBrainFolder(),
+      LIST_MD_TIMEOUT_MS,
+      'Tempo esgotado ao listar o Drive. Verifique a rede e use Recarregar.'
+    );
     state.lastFileList = files;
     if ((el.treeSearch?.value || '').trim()) {
       applyTreeFilter();
@@ -812,7 +857,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=11', window.location.href), {
+      .register(new URL('./sw.js?v=12', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -822,6 +867,10 @@ function registerServiceWorker() {
 }
 
 function logout() {
+  clearTokenRequestTimer();
+  tokenWaiters.splice(0).forEach((w) =>
+    w.reject(new Error('Sessão encerrada'))
+  );
   state.accessToken = null;
   state.currentFile = null;
   state.dirty = false;
@@ -924,6 +973,7 @@ function bindUi() {
 
   attachWikiLinkAutocomplete(state.easyMDE.codemirror);
 
+  setListLoading(false);
   registerServiceWorker();
 }
 
