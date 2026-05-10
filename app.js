@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar na consola F12 se o deploy está atual. */
-const APP_BUILD = '2026-05-10-v3';
+const APP_BUILD = '2026-05-10-v4';
 
 /**
  * Configuração
@@ -15,6 +15,8 @@ const CONFIG = {
   BRAIN_FOLDER_ID: '1vTkjJSKbVZ1Swn7jfoh3IrJuG3E8Shhz',
   /** Se a pasta Brain estiver num Shared Drive (Equipa), ponha true. */
   BRAIN_IN_SHARED_DRIVE: false,
+  /** Obsidian: .md estão em subpastas — lista todas recursivamente (recomendado). */
+  LIST_MD_RECURSIVE: true,
 };
 
 const SCOPES =
@@ -262,10 +264,9 @@ async function driveFetch(url, options = {}) {
   return res;
 }
 
-async function listMdInBrainFolder() {
-  const folderId = getBrainFolderId();
-  if (!folderId) return [];
-  const q = `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`;
+/** Lista tudo o que está directamente dentro de uma pasta (ficheiros e subpastas), com paginação. */
+async function listAllItemsInFolder(pageParentId) {
+  const q = `'${pageParentId}' in parents and trashed = false`;
   const out = [];
   let pageToken;
   const fields = 'nextPageToken, files(id, name, mimeType, modifiedTime)';
@@ -295,7 +296,51 @@ async function listMdInBrainFolder() {
     pageToken = data.nextPageToken;
   } while (pageToken);
 
-  return out.filter((f) => f.name && f.name.toLowerCase().endsWith('.md'));
+  return out;
+}
+
+/** Percorre subpastas e junta .md (vault Obsidian típico). */
+async function listMdRecursive(rootFolderId) {
+  const mdFiles = [];
+  const visited = new Set();
+
+  async function walk(folderId, pathPrefix) {
+    if (visited.has(folderId)) return;
+    visited.add(folderId);
+
+    const items = await listAllItemsInFolder(folderId);
+    for (const item of items) {
+      if (item.mimeType === 'application/vnd.google-apps.folder') {
+        const seg = item.name || 'pasta';
+        await walk(item.id, `${pathPrefix}${seg}/`);
+      } else if (item.name && item.name.toLowerCase().endsWith('.md')) {
+        mdFiles.push({
+          ...item,
+          _listLabel: `${pathPrefix}${item.name}`,
+        });
+      }
+    }
+  }
+
+  await walk(rootFolderId, '');
+  return mdFiles;
+}
+
+/** Só ficheiros .md no nível directo da pasta Brain (legado). */
+async function listMdShallowOnly(brainFolderId) {
+  const items = await listAllItemsInFolder(brainFolderId);
+  return items.filter(
+    (f) => f.name && f.name.toLowerCase().endsWith('.md')
+  );
+}
+
+async function listMdInBrainFolder() {
+  const folderId = getBrainFolderId();
+  if (!folderId) return [];
+  if (CONFIG.LIST_MD_RECURSIVE) {
+    return listMdRecursive(folderId);
+  }
+  return listMdShallowOnly(folderId);
 }
 
 function renderFileList(files) {
@@ -303,7 +348,7 @@ function renderFileList(files) {
   if (!files.length) {
     el.fileListEmpty.hidden = false;
     el.fileListEmpty.textContent =
-      'Nenhum ficheiro .md nesta pasta (ou permissões insuficientes).';
+      'Nenhum .md na pasta Brain (incluindo subpastas). Confirme o ID da pasta no Drive ou se os ficheiros estão noutro sítio.';
     return;
   }
 
@@ -312,13 +357,17 @@ function renderFileList(files) {
 
   files
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    .sort((a, b) => {
+      const la = a._listLabel || a.name;
+      const lb = b._listLabel || b.name;
+      return la.localeCompare(lb, undefined, { sensitivity: 'base' });
+    })
     .forEach((file) => {
       const li = document.createElement('li');
       li.dataset.id = file.id;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = file.name;
+      btn.textContent = file._listLabel || file.name;
       btn.addEventListener('click', () => void selectFile(file, li));
       li.appendChild(btn);
       frag.appendChild(li);
@@ -492,7 +541,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=3', window.location.href), {
+      .register(new URL('./sw.js?v=4', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('SW registar:', e));
