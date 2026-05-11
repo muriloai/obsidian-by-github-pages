@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v28';
+const APP_BUILD = '2026-05-10-v30';
 
 /** Valor do select «Alcance do mapa»: construir grafo com todas as notas (lento). */
 const GRAPH_SCOPE_ALL = '__VAULT_ALL__';
@@ -231,6 +231,26 @@ function normalizePathLabel(label) {
     .replace(/\/+/g, '/')
     .replace(/^\/+|\/+$/g, '')
     .trim();
+}
+
+/** Caminho em bookmarks Obsidian (remove âncora #título / #^bloco). */
+function normalizeBookmarkFilePath(pathStr) {
+  const base = String(pathStr || '').split('#')[0];
+  return normalizePathLabel(base);
+}
+
+function parseJsonLenient(text) {
+  return JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
+}
+
+/** Raiz do array de marcadores (formatos `items`, `bookmarks` ou array direto). */
+function obsidianBookmarksRootItems(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (typeof data !== 'object') return [];
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.bookmarks)) return data.bookmarks;
+  return [];
 }
 
 function noteStemFromFile(file) {
@@ -1316,9 +1336,14 @@ async function findChildFolderId(parentId, folderName) {
 
 async function findFileInFolder(parentId, fileName) {
   const items = await listAllItemsInFolder(parentId);
+  const want = fileName.toLowerCase();
   return (
-    items.find((i) => i.mimeType !== FOLDER_MIME && i.name === fileName) ||
-    null
+    items.find(
+      (i) =>
+        i.mimeType !== FOLDER_MIME &&
+        i.name &&
+        (i.name === fileName || i.name.toLowerCase() === want)
+    ) || null
   );
 }
 
@@ -1330,13 +1355,20 @@ function collectBookmarkPathsFromObsidianJson(data, intoSet) {
       return;
     }
     if (typeof node !== 'object') return;
-    if (node.type === 'file' && typeof node.path === 'string') {
-      intoSet.add(normalizePathLabel(node.path));
+    const t = node.type;
+    if (
+      (t === 'file' || t === 'heading' || t === 'block') &&
+      typeof node.path === 'string'
+    ) {
+      intoSet.add(normalizeBookmarkFilePath(node.path));
+    }
+    if (t === 'folder' && typeof node.path === 'string') {
+      intoSet.add(normalizePathLabel(node.path).replace(/\/+$/g, ''));
     }
     if (node.items) walk(node.items);
     if (node.children) walk(node.children);
   }
-  walk(data?.items ?? data);
+  walk(obsidianBookmarksRootItems(data));
 }
 
 function syncGraphContextBarVisible() {
@@ -1346,6 +1378,19 @@ function syncGraphContextBarVisible() {
 
 function flattenObsidianBookmarksForMenu(raw) {
   const out = [];
+  /** Marcadores com path de nota (file / heading / block e variantes). */
+  function addNoteLikeBookmark(titleBase, pathRaw) {
+    const pl = normalizeBookmarkFilePath(pathRaw);
+    if (!pl) return;
+    const title =
+      (typeof titleBase === 'string' && titleBase.trim()) ||
+      pl.split('/').pop() ||
+      'Marcador';
+    const parent = pl.includes('/') ? pl.replace(/\/[^/]+$/, '') : '';
+    if (parent) out.push({ title: `${title} (pasta)`, pathPrefix: parent });
+    else out.push({ title, pathPrefix: pl });
+  }
+
   function walk(node, depth) {
     if (!node || depth > 40) return;
     if (Array.isArray(node)) {
@@ -1356,21 +1401,24 @@ function flattenObsidianBookmarksForMenu(raw) {
     const type = node.type;
     const title =
       (typeof node.title === 'string' && node.title.trim()) ||
-      (typeof node.path === 'string' && node.path.split('/').pop()) ||
+      (typeof node.path === 'string' &&
+        normalizeBookmarkFilePath(node.path).split('/').pop()) ||
       'Marcador';
+
     if (type === 'folder' && typeof node.path === 'string') {
-      const px = normalizePathLabel(node.path).replace(/\/+$/g, '');
+      const px = normalizeBookmarkFilePath(node.path).replace(/\/+$/g, '');
       if (px) out.push({ title, pathPrefix: px });
-    } else if (type === 'file' && typeof node.path === 'string') {
-      const pl = normalizePathLabel(node.path);
-      const parent = pl.includes('/') ? pl.replace(/\/[^/]+$/, '') : '';
-      if (parent) out.push({ title: `${title} (pasta)`, pathPrefix: parent });
-      else out.push({ title, pathPrefix: pl.replace(/\.md$/i, '') });
+    } else if (typeof node.path === 'string' && node.path.trim()) {
+      const skipTypes = new Set(['search', 'graph', 'url', 'folder']);
+      const pl0 = normalizeBookmarkFilePath(node.path);
+      if (!skipTypes.has(type) && pl0.toLowerCase().endsWith('.md')) {
+        addNoteLikeBookmark(title, node.path);
+      }
     }
     if (node.items) walk(node.items, depth + 1);
     if (node.children) walk(node.children, depth + 1);
   }
-  walk(raw?.items ?? raw, 0);
+  walk(obsidianBookmarksRootItems(raw), 0);
   const seen = new Set();
   return out.filter((e) => {
     const k = `${e.pathPrefix}\0${e.title}`;
@@ -1425,7 +1473,7 @@ async function loadObsidianConfigsFromDrive() {
     const bm = await findFileInFolder(obsId, 'bookmarks.json');
     if (bm) {
       const txt = await getFileContent(bm.id);
-      state.obsidianBookmarksRaw = JSON.parse(txt);
+      state.obsidianBookmarksRaw = parseJsonLenient(txt);
       collectBookmarkPathsFromObsidianJson(
         state.obsidianBookmarksRaw,
         state.obsidianBookmarkPaths
@@ -1435,7 +1483,7 @@ async function loadObsidianConfigsFromDrive() {
     const gf = await findFileInFolder(obsId, 'graph.json');
     if (gf) {
       const txt = await getFileContent(gf.id);
-      state.obsidianGraphRaw = JSON.parse(txt);
+      state.obsidianGraphRaw = parseJsonLenient(txt);
     }
   } catch (e) {
     console.warn('[Brain Drive] .obsidian', e);
@@ -1445,8 +1493,9 @@ async function loadObsidianConfigsFromDrive() {
 
 async function ensureObsidianConfigsLoaded() {
   if (state.obsidianConfigsLoaded) return;
+  const hadAuth = !!(state.accessToken && getBrainFolderId());
   await loadObsidianConfigsFromDrive();
-  state.obsidianConfigsLoaded = true;
+  if (hadAuth) state.obsidianConfigsLoaded = true;
 }
 
 function shortLabelForGraph(f) {
@@ -1854,7 +1903,7 @@ async function refreshVaultGraphView() {
       showGraphLoading(false);
       setGraphProgress('');
       setHeaderGraphStatus(
-        'Escolha um marcador ou «Todo o vault» na lista acima. Só depois o mapa carrega e extrai ligações [[…]] para esse conjunto.'
+        'Escolha um marcador ou «Todo o vault» na lista acima. Só depois o mapa irá carregar.'
       );
       return;
     }

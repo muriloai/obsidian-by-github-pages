@@ -99,9 +99,9 @@ body {
   flex-direction: column;
   align-items: flex-end;
   gap: 0.25rem;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: min(320px, 42vw);
+  max-width: min(280px, 46vw);
 }
 
 .header-meta {
