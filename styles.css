@@ -581,6 +581,16 @@ html.dark .file-tree .tree-file button.is-active {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.editor-titlebar-actions .btn-save-inline {
+  padding: 0.38rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: 6px;
+  line-height: 1.2;
 }
 
 .btn-icon-toolbar {

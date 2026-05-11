@@ -1,5 +1,8 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v26';
+const APP_BUILD = '2026-05-10-v28';
+
+/** Valor do select «Alcance do mapa»: construir grafo com todas as notas (lento). */
+const GRAPH_SCOPE_ALL = '__VAULT_ALL__';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -178,6 +181,8 @@ function setGraphProgress(text) {
 
 function syncEditorChromeVisibility() {
   const has = Boolean(state.currentFile);
+  if (el.btnSave) el.btnSave.hidden = !has;
+  if (el.btnReloadFile) el.btnReloadFile.hidden = !has;
   if (el.btnCloseNote) el.btnCloseNote.hidden = !has;
   if (el.btnDuplicateNote) el.btnDuplicateNote.hidden = !has;
   if (el.btnDeleteNote) el.btnDeleteNote.hidden = !has;
@@ -279,6 +284,9 @@ function rerenderFileTreeFromState() {
   const files = state.lastFileList || [];
   if ((el.treeSearch?.value || '').trim()) applyTreeFilter();
   else renderFileTree(files, { expandAll: false, isFiltered: false });
+  if (state.currentFile?.id) {
+    queueMicrotask(() => revealFileInSidebar(state.currentFile));
+  }
 }
 
 async function fetchDriveFileMeta(fileId) {
@@ -618,6 +626,7 @@ async function getFileContentHead(fileId, maxBytes = 32768) {
     fileId
   )}?alt=media`;
   const res = await driveFetch(url);
+  if (res.status === 404) return '';
   if (!res.ok) throw new Error(await res.text());
   const text = await res.text();
   return text.length > maxBytes ? text.slice(0, maxBytes) : text;
@@ -1140,6 +1149,7 @@ function renderTreeNode(node, container, depth, expandAll) {
     ic.setAttribute('aria-hidden', 'true');
     btn.appendChild(ic);
     btn.appendChild(document.createTextNode(node.name));
+    btn.setAttribute('data-file-id', node.file.id);
     if (state.currentFile?.id === node.file.id) btn.classList.add('is-active');
     btn.addEventListener('click', () => void selectFile(node.file, btn));
     li.appendChild(btn);
@@ -1198,6 +1208,36 @@ function renderFileTree(files, options = {}) {
     renderTreeNode(child, ul, 0, expandAll)
   );
   el.fileTree.appendChild(ul);
+}
+
+/** Expande pastas na sidebar e destaca a nota (ex.: aberta pelo Mapa sem clicar na árvore). */
+function revealFileInSidebar(file) {
+  if (!el.fileTree || !file?.id) return;
+  const fid = String(file.id);
+
+  const findBtn = () =>
+    el.fileTree.querySelector(`button[data-file-id="${fid}"]`);
+
+  let btn = findBtn();
+  if (!btn && el.treeSearch && el.treeSearch.value.trim()) {
+    el.treeSearch.value = '';
+    applyTreeFilter();
+    btn = findBtn();
+  }
+  if (!btn) return;
+
+  el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
+    b.classList.remove('is-active')
+  );
+  btn.classList.add('is-active');
+
+  let x = btn.parentElement;
+  while (x && x !== el.fileTree) {
+    if (x.tagName === 'DETAILS') x.open = true;
+    x = x.parentElement;
+  }
+
+  btn.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function applyTreeFilter() {
@@ -1301,9 +1341,7 @@ function collectBookmarkPathsFromObsidianJson(data, intoSet) {
 
 function syncGraphContextBarVisible() {
   const bar = document.getElementById('graph-context-bar');
-  const sel = el.graphBookmarkSelect || document.getElementById('graph-bookmark-select');
-  if (!bar || !sel) return;
-  bar.hidden = sel.options.length <= 1;
+  if (bar) bar.hidden = false;
 }
 
 function flattenObsidianBookmarksForMenu(raw) {
@@ -1349,8 +1387,12 @@ function populateGraphBookmarkSelect() {
   sel.innerHTML = '';
   const opt0 = document.createElement('option');
   opt0.value = '';
-  opt0.textContent = 'Nenhum (só filtros do graph.json)';
+  opt0.textContent = '— Escolha o alcance para carregar o mapa —';
   sel.appendChild(opt0);
+  const optAll = document.createElement('option');
+  optAll.value = GRAPH_SCOPE_ALL;
+  optAll.textContent = 'Todo o vault (todas as notas · mais lento)';
+  sel.appendChild(optAll);
   for (const e of flattenObsidianBookmarksForMenu(state.obsidianBookmarksRaw)) {
     const o = document.createElement('option');
     o.value = e.pathPrefix;
@@ -1498,6 +1540,9 @@ function getVaultGraphThemeColors() {
 function buildVisNetworkOptions() {
   const th = getVaultGraphThemeColors();
   return {
+    layout: {
+      improvedLayout: false,
+    },
     physics: {
       enabled: true,
       stabilization: { iterations: 120 },
@@ -1554,28 +1599,35 @@ function extractObsidianGraphSettings(raw) {
   return { search, showOrphans };
 }
 
+function sanitizeObsidianPathNeedle(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^["'`«»]+|["'`«»]+$/g, '')
+    .trim();
+}
+
 /** Extrai cláusulas path: e texto livre do campo search do Obsidian (ex.: path:"Pasta/Sub"). */
 function parseObsidianGraphQuery(searchRaw) {
   let rest = String(searchRaw || '');
   const pathNeedles = [];
 
   rest = rest.replace(/path:\s*"([^"]*)"\s*/gi, (_, p) => {
-    const t = (p || '').trim();
+    const t = sanitizeObsidianPathNeedle(p);
     if (t) pathNeedles.push(t);
     return ' ';
   });
   rest = rest.replace(/path:\s*'([^']*)'\s*/gi, (_, p) => {
-    const t = (p || '').trim();
+    const t = sanitizeObsidianPathNeedle(p);
     if (t) pathNeedles.push(t);
     return ' ';
   });
   rest = rest.replace(/path:\s*"([^"]+)/gi, (_, p) => {
-    const t = (p || '').trim();
+    const t = sanitizeObsidianPathNeedle(p);
     if (t) pathNeedles.push(t);
     return ' ';
   });
   rest = rest.replace(/path:\s*([^\s"']+)\s*/gi, (_, p) => {
-    const t = (p || '').trim();
+    const t = sanitizeObsidianPathNeedle(p);
     if (t && !t.startsWith('"') && !t.startsWith("'")) pathNeedles.push(t);
     return ' ';
   });
@@ -1756,8 +1808,10 @@ async function extractVaultGraphEdges(files, stemMap) {
   return edges;
 }
 
-async function buildVaultGraphModel() {
-  const files = state.lastFileList || [];
+async function buildVaultGraphModel(filesOverride) {
+  const files = Array.isArray(filesOverride)
+    ? filesOverride
+    : state.lastFileList || [];
   if (!files.length) return { nodes: [], edges: [] };
   const stemMap = buildStemToFilesMap(files);
   const nodes = buildVaultGraphNodes(files);
@@ -1793,11 +1847,35 @@ async function refreshVaultGraphView() {
     }
     await ensureObsidianConfigsLoaded();
 
-    const files = state.lastFileList || [];
-    const bookmarkPrefix =
+    const scope =
       (el.graphBookmarkSelect && el.graphBookmarkSelect.value) || '';
 
-    const sig = computeVaultListSignature(files);
+    if (!scope) {
+      showGraphLoading(false);
+      setGraphProgress('');
+      setHeaderGraphStatus(
+        'Escolha um marcador ou «Todo o vault» na lista acima. Só depois o mapa carrega e extrai ligações [[…]] para esse conjunto.'
+      );
+      return;
+    }
+
+    let files = state.lastFileList || [];
+    if (scope !== GRAPH_SCOPE_ALL) {
+      files = files.filter((f) =>
+        pathMatchesBookmarkPrefix(f._listLabel || f.name, scope)
+      );
+    }
+
+    if (!files.length) {
+      showGraphLoading(false);
+      setGraphProgress('');
+      setHeaderGraphStatus(
+        'Nenhuma nota neste alcance. Escolha outro marcador ou «Todo o vault».'
+      );
+      return;
+    }
+
+    const sig = `${computeVaultListSignature(files)}|scope:${scope}`;
     let nodes;
     let edges;
 
@@ -1814,7 +1892,7 @@ async function refreshVaultGraphView() {
       }));
     } else {
       setGraphProgress('Construindo notas e extraindo links [[…]]…');
-      const built = await buildVaultGraphModel();
+      const built = await buildVaultGraphModel(files);
       nodes = built.nodes;
       edges = built.edges;
       state.vaultGraphLinkCache = {
@@ -1823,44 +1901,33 @@ async function refreshVaultGraphView() {
       };
     }
 
+    const allowedIds = new Set(files.map((f) => f.id));
+    edges = edges.filter(
+      (e) => allowedIds.has(e.from) && allowedIds.has(e.to)
+    );
+
     let filtered = applyObsidianGraphFilters(
       nodes,
       edges,
       state.obsidianGraphRaw,
       files,
-      bookmarkPrefix,
+      '',
       false
     );
     let usedFallback = false;
-    let fallbackStage = 0;
 
     if (filtered.nodes.length === 0 && files.length > 0) {
-      const relaxedBookmark = applyObsidianGraphFilters(
+      const relaxed = applyObsidianGraphFilters(
         nodes,
         edges,
         state.obsidianGraphRaw,
         files,
-        bookmarkPrefix,
+        '',
         true
       );
-      if (relaxedBookmark.nodes.length > 0) {
-        filtered = relaxedBookmark;
+      if (relaxed.nodes.length > 0) {
+        filtered = relaxed;
         usedFallback = true;
-        fallbackStage = 1;
-      } else {
-        const relaxedAll = applyObsidianGraphFilters(
-          nodes,
-          edges,
-          state.obsidianGraphRaw,
-          files,
-          '',
-          true
-        );
-        if (relaxedAll.nodes.length > 0) {
-          filtered = relaxedAll;
-          usedFallback = true;
-          fallbackStage = 2;
-        }
       }
     }
 
@@ -1875,19 +1942,18 @@ async function refreshVaultGraphView() {
         );
       } else {
         setHeaderGraphStatus(
-          'Nenhuma nota visível após filtros. Experimente outro marcador ou reveja o graph.json no Obsidian.'
+          'Nenhuma nota visível com os filtros do graph.json neste alcance. Ajuste no Obsidian ou escolha outro marcador.'
         );
       }
     } else {
       let line = `${nodes.length} notas · ${edges.length} ligações`;
-      if (filtered.filterNote) line += ` · ${filtered.filterNote}`;
-      if (usedFallback && fallbackStage === 1) {
-        line +=
-          ' · pesquisa do graph.json excluía tudo — mapa sem esse texto (marcador mantido)';
+      if (scope !== GRAPH_SCOPE_ALL) {
+        line += ` · alcance: ${normalizePathLabel(scope).slice(0, 56)}${normalizePathLabel(scope).length > 56 ? '…' : ''}`;
       }
-      if (usedFallback && fallbackStage === 2) {
+      if (filtered.filterNote) line += ` · ${filtered.filterNote}`;
+      if (usedFallback) {
         line +=
-          ' · filtros/marcador excluíam tudo — mapa completo do vault';
+          ' · texto do graph.json excluía tudo — mapa só com filtro de caminho/órfãs';
       }
       if (bm) line += ` · ${bm} favorito(s) (bookmarks.json)`;
       setHeaderGraphStatus(line);
@@ -1940,14 +2006,11 @@ function switchVaultTab(tab) {
   if (el.panelEditor) el.panelEditor.hidden = tab !== 'editor';
   if (el.panelGraph) el.panelGraph.hidden = tab !== 'graph';
 
-  const showEditorChrome = tab === 'editor';
-  if (el.btnSave) el.btnSave.hidden = !showEditorChrome;
-  if (el.btnReloadFile) el.btnReloadFile.hidden = !showEditorChrome;
-
   syncVaultSidebarForTab();
 
   if (tab === 'editor') {
     clearHeaderGraphStatus();
+    syncEditorChromeVisibility();
   } else {
     clearHeaderGraphStatus();
     ensureVaultGraphResizeObserver();
@@ -2109,13 +2172,6 @@ async function selectFile(file, btnEl) {
       if (!ok) return;
     }
 
-    if (el.fileTree) {
-      el.fileTree.querySelectorAll('.tree-file button').forEach((b) =>
-        b.classList.remove('is-active')
-      );
-      if (btnEl) btnEl.classList.add('is-active');
-    }
-
     state.currentFile = file;
     setEditorFileTitle(file._listLabel || file.name);
     if (el.noteTitleInput)
@@ -2132,6 +2188,7 @@ async function selectFile(file, btnEl) {
     el.btnSave.disabled = false;
     if (el.btnReloadFile) el.btnReloadFile.disabled = false;
     syncEditorChromeVisibility();
+    revealFileInSidebar(file);
     setSaveStatus('');
   } catch (e) {
     console.error(e);
@@ -2181,7 +2238,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=26', window.location.href), {
+      .register(new URL('./sw.js?v=28', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
