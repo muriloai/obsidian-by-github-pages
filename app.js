@@ -1,5 +1,5 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v32';
+const APP_BUILD = '2026-05-10-v33';
 
 /** Valor do select «Alcance do mapa»: construir grafo com todas as notas (lento). */
 const GRAPH_SCOPE_ALL = '__VAULT_ALL__';
@@ -1703,9 +1703,18 @@ function sanitizeObsidianPathNeedle(raw) {
     .trim();
 }
 
+/**
+ * Obsidian às vezes grava aspas tipográficas no JSON; o parser path:"…" só reconhece " ASCII.
+ */
+function normalizeObsidianGraphSearchSyntax(raw) {
+  return String(raw || '')
+    .replace(/[\u201c\u201d\u00ab\u00bb]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'");
+}
+
 /** Extrai path:, -path: e texto livre do campo search do grafo Obsidian. */
 function parseObsidianGraphQuery(searchRaw) {
-  let rest = String(searchRaw || '');
+  let rest = normalizeObsidianGraphSearchSyntax(String(searchRaw || ''));
   const pathNeedles = [];
   const pathNegative = [];
 
@@ -1885,7 +1894,11 @@ async function applyObsidianColorGroupsToNodes(nodes, files, colorGroups) {
   });
 }
 
-function filterFilesByObsidianGraphSearch(fileList, searchRaw) {
+function filterFilesByObsidianGraphSearch(fileList, optionsOrSearch) {
+  const searchRaw =
+    typeof optionsOrSearch === 'string'
+      ? optionsOrSearch
+      : extractObsidianGraphSettings(optionsOrSearch || {}).search;
   const parsed = parseObsidianGraphQuery(searchRaw || '');
   return (fileList || []).filter((f) => {
     const path = normalizePathLabel(f._listLabel || f.name);
@@ -1898,17 +1911,17 @@ function filterFilesByObsidianGraphSearch(fileList, searchRaw) {
   });
 }
 
+/**
+ * Cada agulha path:… deve aparecer no caminho da nota (como no Obsidian: pasta/caminho contém o texto).
+ * Sem heurística por segmento — evita que "Tech" corresponda fora da pasta certa.
+ */
 function pathMatchesObsidianPathNeedles(fullPath, needles) {
   if (!needles.length) return true;
   const fp = normalizePathLabel(fullPath).toLowerCase();
   for (const raw of needles) {
     const n = normalizePathLabel(raw).toLowerCase().replace(/^\/+|\/+$/g, '');
     if (!n) continue;
-    if (fp.includes(n)) continue;
-    const segments = n.split('/').filter(Boolean);
-    if (segments.length && segments.some((seg) => seg.length >= 2 && fp.includes(seg.toLowerCase())))
-      continue;
-    return false;
+    if (!fp.includes(n)) return false;
   }
   return true;
 }
@@ -2130,7 +2143,7 @@ async function refreshVaultGraphView() {
         effectiveGraphRaw = gb.options;
         files = filterFilesByObsidianGraphSearch(
           state.lastFileList || [],
-          gb.options.search || ''
+          gb.options
         );
       } else {
         files = [];
@@ -2525,7 +2538,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=32', window.location.href), {
+      .register(new URL('./sw.js?v=33', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
