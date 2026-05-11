@@ -1,8 +1,13 @@
 /** Incrementar ao mudar lógica — verificar no console (F12) se o deploy está atualizado. */
-const APP_BUILD = '2026-05-10-v30';
+const APP_BUILD = '2026-05-10-v32';
 
 /** Valor do select «Alcance do mapa»: construir grafo com todas as notas (lento). */
 const GRAPH_SCOPE_ALL = '__VAULT_ALL__';
+/**
+ * Obsidian: bookmark do tipo `graph` em bookmarks.json (vista de grafo + filtros + colorGroups).
+ * Valor do select: prefixo + ctime.
+ */
+const GRAPH_SCOPE_GRAPH_PREFIX = '__OBS_GRAPH__';
 
 const TREE_SEARCH_DEBOUNCE_MS = 200;
 /** Autocomplete tipo Obsidian [[ — mínimo de caracteres após [[ (1 = já após uma letra) */
@@ -75,6 +80,8 @@ const state = {
   vaultGraphRefreshQueued: false,
   /** Evita reler .obsidian ao mudar só de aba Editor ↔ Mapa. */
   obsidianConfigsLoaded: false,
+  /** Bookmarks `type: graph` do Obsidian (title + options como graph.json local). */
+  graphBookmarkList: [],
 };
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -1428,24 +1435,61 @@ function flattenObsidianBookmarksForMenu(raw) {
   });
 }
 
+function collectGraphBookmarksFromItems(items) {
+  state.graphBookmarkList = [];
+  function walk(node) {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    if (
+      node.type === 'graph' &&
+      node.options &&
+      typeof node.ctime === 'number'
+    ) {
+      state.graphBookmarkList.push({
+        ctime: node.ctime,
+        title: String(node.title || 'Grafo').trim() || 'Grafo',
+        options: node.options,
+      });
+    }
+    if (node.items) walk(node.items);
+    if (node.children) walk(node.children);
+  }
+  walk(items);
+}
+
 function populateGraphBookmarkSelect() {
   const sel = el.graphBookmarkSelect || document.getElementById('graph-bookmark-select');
   if (!sel) return;
   const prev = sel.value;
   sel.innerHTML = '';
-  const opt0 = document.createElement('option');
-  opt0.value = '';
-  opt0.textContent = '— Escolha o alcance para carregar o mapa —';
-  sel.appendChild(opt0);
   const optAll = document.createElement('option');
   optAll.value = GRAPH_SCOPE_ALL;
   optAll.textContent = 'Todo o vault (todas as notas · mais lento)';
   sel.appendChild(optAll);
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = '— Escolha um bookmark salvo no Obsidian —';
+  sel.appendChild(opt0);
   for (const e of flattenObsidianBookmarksForMenu(state.obsidianBookmarksRaw)) {
     const o = document.createElement('option');
     o.value = e.pathPrefix;
     o.textContent = e.title;
     sel.appendChild(o);
+  }
+  if (state.graphBookmarkList.length) {
+    const og = document.createElement('optgroup');
+    og.label = 'Vistas de grafo (Obsidian)';
+    for (const gb of state.graphBookmarkList) {
+      const o = document.createElement('option');
+      o.value = GRAPH_SCOPE_GRAPH_PREFIX + gb.ctime;
+      o.textContent = gb.title;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
   }
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   else sel.value = '';
@@ -1456,6 +1500,7 @@ async function loadObsidianConfigsFromDrive() {
   state.obsidianBookmarksRaw = null;
   state.obsidianGraphRaw = null;
   state.obsidianBookmarkPaths = new Set();
+  state.graphBookmarkList = [];
 
   const root = getBrainFolderId();
   if (!root || !state.accessToken) {
@@ -1477,6 +1522,9 @@ async function loadObsidianConfigsFromDrive() {
       collectBookmarkPathsFromObsidianJson(
         state.obsidianBookmarksRaw,
         state.obsidianBookmarkPaths
+      );
+      collectGraphBookmarksFromItems(
+        obsidianBookmarksRootItems(state.obsidianBookmarksRaw)
       );
     }
 
@@ -1655,10 +1703,27 @@ function sanitizeObsidianPathNeedle(raw) {
     .trim();
 }
 
-/** Extrai cláusulas path: e texto livre do campo search do Obsidian (ex.: path:"Pasta/Sub"). */
+/** Extrai path:, -path: e texto livre do campo search do grafo Obsidian. */
 function parseObsidianGraphQuery(searchRaw) {
   let rest = String(searchRaw || '');
   const pathNeedles = [];
+  const pathNegative = [];
+
+  rest = rest.replace(/-path:\s*"([^"]*)"\s*/gi, (_, p) => {
+    const t = sanitizeObsidianPathNeedle(p);
+    if (t) pathNegative.push(t);
+    return ' ';
+  });
+  rest = rest.replace(/-path:\s*'([^']*)'\s*/gi, (_, p) => {
+    const t = sanitizeObsidianPathNeedle(p);
+    if (t) pathNegative.push(t);
+    return ' ';
+  });
+  rest = rest.replace(/-path:\s*([^\s]+)\s*/gi, (_, p) => {
+    const t = sanitizeObsidianPathNeedle(p);
+    if (t && !t.startsWith('"') && !t.startsWith("'")) pathNegative.push(t);
+    return ' ';
+  });
 
   rest = rest.replace(/path:\s*"([^"]*)"\s*/gi, (_, p) => {
     const t = sanitizeObsidianPathNeedle(p);
@@ -1683,8 +1748,154 @@ function parseObsidianGraphQuery(searchRaw) {
 
   return {
     pathNeedles,
+    pathNegative,
     freeText: rest.replace(/\s+/g, ' ').trim(),
   };
+}
+
+function pathViolatesNegative(fullPath, negatives) {
+  if (!negatives?.length) return false;
+  const fp = normalizePathLabel(fullPath).toLowerCase();
+  for (const raw of negatives) {
+    const n = normalizePathLabel(raw).toLowerCase().replace(/^\/+|\/+$/g, '');
+    if (!n) continue;
+    if (fp.includes(n)) return true;
+  }
+  return false;
+}
+
+/** YAML frontmatter simples (linhas `chave: valor`) para grupos de cor do grafo. */
+function parseSimpleYamlFrontmatter(text) {
+  const m = String(text || '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!m) return {};
+  const kv = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    if (/^\s*#/.test(line)) continue;
+    const mm = line.match(/^([\w-]+)\s*:\s*(.*)$/);
+    if (!mm) continue;
+    const k = mm[1].trim().toLowerCase();
+    let v = mm[2].trim();
+    v = stripYamlQuotes(v);
+    kv[k] = v;
+  }
+  return kv;
+}
+
+function obsidianRgbToCssRgb(colorObj) {
+  if (!colorObj || typeof colorObj.rgb !== 'number') return null;
+  const n = colorObj.rgb >>> 0;
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  return `rgb(${r},${g},${b})`;
+}
+
+function darkenRgbBorder(rgbCss) {
+  const m = String(rgbCss).match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+  if (!m) return rgbCss;
+  const k = 0.55;
+  return `rgb(${Math.round(+m[1] * k)},${Math.round(+m[2] * k)},${Math.round(+m[3] * k)})`;
+}
+
+/**
+ * Grupos de cor do graph.json / bookmark graph (path:… ou ["chave":valor] no frontmatter).
+ * Consultas com OR não são suportadas.
+ */
+function colorGroupQueryMatches(fullPath, fmKv, queryRaw) {
+  const q = String(queryRaw || '').trim();
+  if (!q || /\sOR\s/i.test(q)) return false;
+
+  const pathQuoted = q.match(/^path:\s*"([^"]*)"\s*$/i);
+  if (pathQuoted) {
+    const needle = sanitizeObsidianPathNeedle(pathQuoted[1]);
+    return (
+      !!needle &&
+      normalizePathLabel(fullPath).toLowerCase().includes(needle.toLowerCase())
+    );
+  }
+  const pathBare = q.match(/^path:\s*([^\s]+)\s*$/i);
+  if (pathBare && !q.includes('["')) {
+    const needle = sanitizeObsidianPathNeedle(pathBare[1]);
+    return (
+      !!needle &&
+      normalizePathLabel(fullPath).toLowerCase().includes(needle.toLowerCase())
+    );
+  }
+
+  const m = q.match(/\["([^"]+)"\s*:\s*([^\]]*?)\]\s*$/);
+  if (m) {
+    const key = m[1].trim().toLowerCase();
+    let want = m[2].trim();
+    want = stripYamlQuotes(want);
+    const got = fmKv[key];
+    if (got == null || String(got).trim() === '') return false;
+    if (want === '') return false;
+    return String(got).trim() === want || String(got).includes(want);
+  }
+  return false;
+}
+
+async function applyObsidianColorGroupsToNodes(nodes, files, colorGroups) {
+  const groups = Array.isArray(colorGroups) ? colorGroups : [];
+  if (!groups.length || !nodes.length) return nodes;
+
+  const fileById = new Map((files || []).map((f) => [f.id, f]));
+  const ids = [...new Set(nodes.map((n) => n.id))];
+  const fmCache = new Map();
+  const batchSize = 8;
+
+  for (let j = 0; j < ids.length; j += batchSize) {
+    const slice = ids.slice(j, j + batchSize);
+    await Promise.all(
+      slice.map(async (id) => {
+        const f = fileById.get(id);
+        if (!f?.id) {
+          fmCache.set(id, {});
+          return;
+        }
+        try {
+          const text = await getFileContentHead(f.id);
+          fmCache.set(id, parseSimpleYamlFrontmatter(text));
+        } catch {
+          fmCache.set(id, {});
+        }
+      })
+    );
+  }
+
+  return nodes.map((n) => {
+    const f = fileById.get(n.id);
+    const path = normalizePathLabel(f?._listLabel || f?.name || '');
+    const fm = fmCache.get(n.id) || {};
+    for (const cg of groups) {
+      const q = cg?.query;
+      if (!q || typeof q !== 'string') continue;
+      if (!colorGroupQueryMatches(path, fm, q.trim())) continue;
+      const bg = obsidianRgbToCssRgb(cg.color);
+      if (!bg) continue;
+      return {
+        ...n,
+        color: {
+          background: bg,
+          border: darkenRgbBorder(bg),
+        },
+      };
+    }
+    return n;
+  });
+}
+
+function filterFilesByObsidianGraphSearch(fileList, searchRaw) {
+  const parsed = parseObsidianGraphQuery(searchRaw || '');
+  return (fileList || []).filter((f) => {
+    const path = normalizePathLabel(f._listLabel || f.name);
+    if (pathViolatesNegative(path, parsed.pathNegative)) return false;
+    if (parsed.pathNeedles.length && !pathMatchesObsidianPathNeedles(path, parsed.pathNeedles))
+      return false;
+    if (!obsidianFreeTextMatchesFullPath(path, shortLabelForGraph(f), parsed.freeText))
+      return false;
+    return true;
+  });
 }
 
 function pathMatchesObsidianPathNeedles(fullPath, needles) {
@@ -1743,6 +1954,7 @@ function applyObsidianGraphFilters(nodes, edges, raw, files, bookmarkPathPrefix,
   let outN = nodes.filter((n) => {
     const path = idToPath.get(n.id) || '';
     if (!pathMatchesBookmarkPrefix(path, bookmarkPathPrefix)) return false;
+    if (pathViolatesNegative(path, parsed.pathNegative)) return false;
     if (!pathMatchesObsidianPathNeedles(path, parsed.pathNeedles)) return false;
     if (!obsidianFreeTextMatchesFullPath(path, n.label || '', parsed.freeText))
       return false;
@@ -1903,13 +2115,27 @@ async function refreshVaultGraphView() {
       showGraphLoading(false);
       setGraphProgress('');
       setHeaderGraphStatus(
-        'Escolha um marcador ou «Todo o vault» na lista acima. Só depois o mapa irá carregar.'
+        'Escolha um bookmark salvo no Obsidian na lista acima. Só depois o mapa irá carregar.'
       );
       return;
     }
 
     let files = state.lastFileList || [];
-    if (scope !== GRAPH_SCOPE_ALL) {
+    let effectiveGraphRaw = state.obsidianGraphRaw;
+
+    if (scope.startsWith(GRAPH_SCOPE_GRAPH_PREFIX)) {
+      const idStr = scope.slice(GRAPH_SCOPE_GRAPH_PREFIX.length);
+      const gb = state.graphBookmarkList.find((x) => String(x.ctime) === idStr);
+      if (gb?.options) {
+        effectiveGraphRaw = gb.options;
+        files = filterFilesByObsidianGraphSearch(
+          state.lastFileList || [],
+          gb.options.search || ''
+        );
+      } else {
+        files = [];
+      }
+    } else if (scope !== GRAPH_SCOPE_ALL) {
       files = files.filter((f) =>
         pathMatchesBookmarkPrefix(f._listLabel || f.name, scope)
       );
@@ -1919,7 +2145,7 @@ async function refreshVaultGraphView() {
       showGraphLoading(false);
       setGraphProgress('');
       setHeaderGraphStatus(
-        'Nenhuma nota neste alcance. Escolha outro marcador ou «Todo o vault».'
+        'Nenhuma nota neste alcance. Escolha outro bookmark ou «Todo o vault».'
       );
       return;
     }
@@ -1958,7 +2184,7 @@ async function refreshVaultGraphView() {
     let filtered = applyObsidianGraphFilters(
       nodes,
       edges,
-      state.obsidianGraphRaw,
+      effectiveGraphRaw,
       files,
       '',
       false
@@ -1969,7 +2195,7 @@ async function refreshVaultGraphView() {
       const relaxed = applyObsidianGraphFilters(
         nodes,
         edges,
-        state.obsidianGraphRaw,
+        effectiveGraphRaw,
         files,
         '',
         true
@@ -1983,6 +2209,12 @@ async function refreshVaultGraphView() {
     nodes = filtered.nodes;
     edges = filtered.edges;
 
+    const cg = effectiveGraphRaw?.colorGroups;
+    if (Array.isArray(cg) && cg.length && nodes.length) {
+      setGraphProgress('Aplicando cores dos grupos (frontmatter)…');
+      nodes = await applyObsidianColorGroupsToNodes(nodes, files, cg);
+    }
+
     const bm = state.obsidianBookmarkPaths.size;
     if (nodes.length === 0) {
       if (!files.length) {
@@ -1991,13 +2223,19 @@ async function refreshVaultGraphView() {
         );
       } else {
         setHeaderGraphStatus(
-          'Nenhuma nota visível com os filtros do graph.json neste alcance. Ajuste no Obsidian ou escolha outro marcador.'
+          'Nenhuma nota visível com os filtros do graph.json neste alcance. Ajuste no Obsidian ou escolha outro bookmark.'
         );
       }
     } else {
       let line = `${nodes.length} notas · ${edges.length} ligações`;
-      if (scope !== GRAPH_SCOPE_ALL) {
-        line += ` · alcance: ${normalizePathLabel(scope).slice(0, 56)}${normalizePathLabel(scope).length > 56 ? '…' : ''}`;
+      if (scope.startsWith(GRAPH_SCOPE_GRAPH_PREFIX)) {
+        const idStr = scope.slice(GRAPH_SCOPE_GRAPH_PREFIX.length);
+        const gb = state.graphBookmarkList.find((x) => String(x.ctime) === idStr);
+        const tit = gb?.title?.slice(0, 72) || 'grafo';
+        line += ` · vista: ${tit}${(gb?.title?.length || 0) > 72 ? '…' : ''}`;
+      } else if (scope !== GRAPH_SCOPE_ALL) {
+        const al = normalizePathLabel(scope);
+        line += ` · alcance: ${al.slice(0, 56)}${al.length > 56 ? '…' : ''}`;
       }
       if (filtered.filterNote) line += ` · ${filtered.filterNote}`;
       if (usedFallback) {
@@ -2287,7 +2525,7 @@ function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const onReady = () => {
     navigator.serviceWorker
-      .register(new URL('./sw.js?v=28', window.location.href), {
+      .register(new URL('./sw.js?v=32', window.location.href), {
         scope: './',
       })
       .catch((e) => console.warn('Service Worker:', e));
@@ -2330,6 +2568,7 @@ function logout() {
   state.obsidianBookmarksRaw = null;
   state.obsidianGraphRaw = null;
   state.obsidianBookmarkPaths = new Set();
+  state.graphBookmarkList = [];
   invalidateVaultGraphLinkCache();
   invalidateObsidianConfigCache();
   switchVaultTab('editor');
